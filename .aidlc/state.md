@@ -1,19 +1,31 @@
 # AIDLC State
 
-- **Phase**: implementing
+- **Phase**: shipped
 - **Branch**: feat/real-adapter-wiring
-- **PR**: (TBD)
-- **Last action**: 2026-07-04T00:10:00Z
-- **Next action**: Run /implement T-105 (live smoke + CI opt-in + docs)
-- **Notes**: T-101 + T-102 + T-103 + T-104 done. All 4 real adapters
-  shipping: Supabase (PostgREST CRUD + RLS-error typing), LINE (Reply/Push
-  + bot-info cache + Markdown strip + 5/4500 chunker + self-message
-  filter), AI (Anthropic SDK + FallbackToNext/BadRequest mapping +
-  versioned prompt V1), Storage (upload + public/signed URL + 10MB cap).
-  47 new tests, 184 total passing, coverage 93.04%.
-  Final task: T-105 — live smoke tests (RUN_LIVE_SMOKE=1 + workflow_dispatch),
-  CI opt-in (real adapter tests in regular CI via MockTransport), docs
-  (adapters.md updated, runbook.md 'Bring up real services' section,
-  production-deploy.md).
+- **PR**: (TBD — push branch + open PR)
+- **Last action**: 2026-07-04T00:30:00Z
+- **Next action**: Push branch + open PR; /review + /ship
+- **Notes**:
+  - 🎉 **Cycle 2 (real-adapter-wiring) complete** — all 5 tasks shipped.
+  - All 4 real adapters now wire to real services via httpx:
+    * Supabase DB → PostgREST CRUD with typed PermissionError
+    * LINE → Reply/Push API w/ bot-info cache + Markdown strip + chunker
+    * AI → Anthropic SDK (Claude 3.5 Sonnet) w/ FallbackToNext/BadRequest
+      mapping + versioned prompt V1
+    * Storage → Supabase Storage upload w/ public/signed URL + 10MB cap
+  - Live smoke tests gated by RUN_LIVE_SMOKE=1; CI job runs on
+    workflow_dispatch (manual) with GitHub Actions secrets
+  - docs/adapters.md updated (all 4 rows: ✅ Shipped)
+  - docs/production-deploy.md written (8-step walk-through)
+  - **Verification (final, all 5 tasks):**
+    - pytest: 184 tests pass, 7 skipped (real_swap + live_smoke opt-in)
+    - coverage: 93.04% (≥ 80% gate) ✅
+    - ruff + ruff-format: clean
+    - mypy app/ strict: 0 issues across 53 files
+  - Router code unchanged (AC-RW-08): 0 router files modified by this cycle.
+  - To bring up real services: follow docs/production-deploy.md — flip
+    USE_MOCKS=false + add credentials.
 
-_Updated: 2026-07-04T00:10:00Z_
+_Updated: 2026-07-04T00:30:00Z_
+
+_Updated: 2026-07-04T00:30:00Z_
