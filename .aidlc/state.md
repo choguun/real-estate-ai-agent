@@ -3,14 +3,14 @@
 - **Phase**: implementing
 - **Branch**: feat/month-1-mvp
 - **PR**: 1
-- **Last action**: 2026-07-03T06:55:00Z
-- **Next action**: Run /implement T-002 (mock Supabase adapter + migration runner)
+- **Last action**: 2026-07-03T07:15:00Z
+- **Next action**: Run /implement T-003 (auth: signup / login / LIFF + JWT)
 - **Notes**:
-  - T-001 ✅ Repo scaffold + FastAPI + Next.js + /health + CI.
-    - pytest: 3/3 passed, ruff clean, mypy strict clean.
-    - npm: lint clean, tsc clean, vitest 2/2 passed.
-    - uvicorn smoke test: GET /health → 200 {"status":"ok"}.
-  - 12 of 12 tasks remaining. Prerequisite for all: T-002 (mock DB) must
-    land before auth/properties/AI/LINE can store anything.
+  - T-001 ✅ FastAPI + Next.js shells, /health, CI matrix, 3 tests.
+  - T-002 ✅ Mock Supabase adapter + Protocol + factory + canonical SQL.
+    - 25/25 tests pass. Coverage 91% on `app/`. ruff/mypy clean.
+    - Adapter Protocol pattern proven — T-005/006/008 mirror this same shape.
+    - `USE_REAL_SUPABASE=true` swaps in the stub real client (network calls deferred to tasks that need them).
+  - 11 of 12 tasks remaining. Next load-bearing: T-003 auth (gates all subsequent routers).
 
-_Updated: 2026-07-03T06:55:00Z_
+_Updated: 2026-07-03T07:15:00Z_
