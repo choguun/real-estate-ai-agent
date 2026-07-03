@@ -50,7 +50,7 @@ export interface Property {
 /** Subset of Property fields the AI generator accepts in its request. */
 export interface PropertySummaryForAi {
   title?: string | null;
-  property_type?: PropertyType | null;
+  property_type?: string | null;
   price?: number | null;
   size_sqm?: number | null;
   bedrooms?: number | null;
@@ -82,10 +82,42 @@ export interface GeneratedContent {
   prompt_used?: string | null;
 }
 
+/** Persisted version of a generated listing (one row per (property, platform)). */
+export interface SavedListing extends GeneratedContent {
+  id: string;
+  property_id: string;
+  user_id: string;
+  is_published: boolean;
+  raw_response: unknown | null;
+  created_at: string | null;
+}
+
+/** Payload for POST /api/listings — used by PropertyForm auto-save. */
+export interface SaveListingInput {
+  property_id: string;
+  platform: Platform;
+  title: string;
+  description: string;
+  hashtags?: string[];
+  seo_keywords?: string[];
+  ai_model?: string | null;
+  prompt_used?: string | null;
+}
+
+/** Payload for PATCH /api/listings/{id}. */
+export interface UpdateListingInput {
+  title?: string;
+  description?: string;
+  hashtags?: string[];
+  seo_keywords?: string[];
+  is_published?: boolean;
+}
+
+
 export interface PropertyCreateInput {
   title?: string | null;
   description?: string | null;
-  property_type?: PropertyType | null;
+  property_type?: string | null;
   price?: number | null;
   size_sqm?: number | null;
   bedrooms?: number | null;

@@ -4,7 +4,7 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 
 import { ApiError } from "@/lib/api";
-import { generateListing } from "@/lib/listings";
+import { generateListing, saveListing } from "@/lib/listings";
 import { createProperty } from "@/lib/properties";
 import type {
   GeneratedContent,
@@ -111,6 +111,29 @@ export function PropertyForm() {
 
     try {
       const created: Property = await createProperty(payload);
+
+      // Auto-save any generated listings the user previewed.
+      if (generated && generated.length > 0) {
+        try {
+          for (const l of generated) {
+            await saveListing({
+              property_id: created.id,
+              platform: l.platform,
+              title: l.title,
+              description: l.description,
+              hashtags: l.hashtags,
+              seo_keywords: l.seo_keywords,
+              ai_model: l.ai_model,
+              prompt_used: l.prompt_used ?? null,
+            });
+          }
+        } catch (err) {
+          // Property was created but some listings failed — surface but don't
+          // block navigation; the user can regenerate from the detail page.
+          console.error("Failed to save generated listings", err);
+        }
+      }
+
       router.push(`/properties/${created.id}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.detail || err.message : "Save failed");
