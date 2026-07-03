@@ -126,6 +126,7 @@ USERS = Table(
         _col("id", "UUID", nullable=False, default=_uuid),
         _col("email", "TEXT", nullable=False),
         _col("full_name", "TEXT", nullable=False),
+        _col("password_hash", "TEXT"),
         _col("phone", "TEXT"),
         _col("avatar_url", "TEXT"),
         _col("role", "TEXT", default=_role_agent),

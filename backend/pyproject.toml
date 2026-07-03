@@ -28,6 +28,7 @@ select = [
 ignore = [
     "S101",  # asserts in tests are fine
     "UP017", # datetime.UTC — not in installed typeshed; mypy can't see it
+    "N818",  # exception naming — we use `Email`/`Credentials` not `EmailError` for clarity
 ]
 
 [tool.ruff.lint.per-file-ignores]

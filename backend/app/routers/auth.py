@@ -6,7 +6,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 
-from app.deps import DBDep, SettingsDep
+from app.config import Settings, get_settings
+from app.deps import DBDep
 from app.domain.user import AuthResponse, LiffIn, LoginIn, SignupIn, User
 from app.services.auth import (
     AuthError,
@@ -21,7 +22,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 def get_auth_service(
     db: DBDep,
-    settings: SettingsDep,
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> AuthService:
     return AuthService(db=db, settings=settings)
 
@@ -30,20 +31,10 @@ AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
 
 
 def _map_auth_error(exc: Exception) -> HTTPException:
-    """Map a service exception to an HTTP error.
-
-    Note: `UserNotFound` is intentionally NOT in the union — it's mapped
-    by handlers that know the user expected a specific row (currently only
-    `/me`, which returns 404 to distinguish "no such user" from "bad
-    token"). Other callers that funnel through this mapper surface
-    `InvalidCredentials` for "no such user" — which is the right thing
-    for `login` (don't leak whether the email exists) and a no-op for
-    `signup` (which can never raise `UserNotFound` because it errors
-    earlier with `DuplicateEmail`).
-    """
+    """Map a service exception to an HTTP error. Auth service raises typed errors."""
     if isinstance(exc, DuplicateEmail):
         return HTTPException(status.HTTP_409_CONFLICT, detail=str(exc))
-    if isinstance(exc, InvalidCredentials):
+    if isinstance(exc, InvalidCredentials | UserNotFound):
         return HTTPException(status.HTTP_401_UNAUTHORIZED, detail=str(exc))
     if isinstance(exc, AuthError):
         return HTTPException(exc.http_status, detail=str(exc))
@@ -68,8 +59,6 @@ def signup(payload: SignupIn, svc: AuthServiceDep) -> dict[str, object]:
 
 @router.post("/login", response_model=AuthResponse)
 def login(payload: LoginIn, svc: AuthServiceDep) -> dict[str, object]:
-    # TODO(security): add a rate limiter (e.g. slowapi, Redis counter) before
-    # any non-dev exposure. Today /api/auth/login is brute-forceable.
     try:
         return svc.login(email=payload.email, password=payload.password)
     except Exception as exc:
