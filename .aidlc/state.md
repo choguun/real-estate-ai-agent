@@ -3,14 +3,16 @@
 - **Phase**: implementing
 - **Branch**: feat/real-adapter-wiring
 - **PR**: (TBD)
-- **Last action**: 2026-07-03T23:20:00Z
-- **Next action**: Run /implement T-103 (Real AI adapter — Anthropic SDK + Gemini fallback)
-- **Notes**: T-101 + T-102 done. RealSupabaseAdapter (PostgREST) + RealLineAdapter
-  (Reply/Push API w/ bot-info cache + Markdown strip + 5/4500 chunker +
-  self-message echo filter) both shipping. 25 new tests, 162 total
-  passing, 5 skipped (real_swap opt-in), coverage 92.75%.
-  Starting T-103: Anthropic SDK call (Claude 3.5 Sonnet), typed errors
-  (AIRateLimitError / AIError), silent Gemini fallback on 429/5xx/timeout
-  per OQ-F, versioned prompt templates in app/adapters/ai/prompts.py.
+- **Last action**: 2026-07-03T23:50:00Z
+- **Next action**: Run /implement T-104 (Real Storage — Supabase Storage upload + signed URL)
+- **Notes**: T-101 + T-102 + T-103 done. RealSupabaseAdapter (PostgREST),
+  RealLineAdapter (Reply/Push API + bot-info cache + Markdown strip +
+  self-message filter), AnthropicRealAdapter (Claude 3.5 Sonnet SDK
+  with typed FallbackToNext/BadRequest mapping + versioned prompt V1).
+  35 new tests, 172 total passing, coverage 92.99%.
+  Starting T-104: real Supabase Storage upload (POST /storage/v1/object/
+  {bucket}/{path}) returning public URL; bucket configurable via
+  SUPABASE_STORAGE_BUCKET env (default 'uploads'); preserves the
+  10MB cap + MIME allow-list from the mock.
 
-_Updated: 2026-07-03T23:20:00Z_
+_Updated: 2026-07-03T23:50:00Z_
