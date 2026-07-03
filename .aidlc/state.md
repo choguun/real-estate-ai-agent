@@ -1,19 +1,15 @@
 # AIDLC State
 
-- **Phase**: shipped
-- **Branch**: (none — feat/month-1-mvp deleted post-merge)
-- **PR**: [#1 Month-1 MVP](https://github.com/choguun/real-estate-ai-agent/pull/1) MERGED · [#2 hermes-agent takeaways](https://github.com/choguun/real-estate-ai-agent/pull/2) MERGED
-- **Last action**: 2026-07-03T22:10:00Z
-- **Next action**: Start a new AIDLC cycle for the next feature (e.g. `/aidlc start "<name>"`)
-- **Notes**:
-  - Month-1 MVP shipped to `main` via PR #1 (commit `41771c2`).
-  - Follow-up Tier-1/2 review fixes + hermes-agent#23197 takeaways landed via PR #2 (commit `80afc9b`).
-  - Final verification (post-merge, on `main`):
-    - pytest: 138/138 ✅ (5 real_swap skip w/o flag; all 6 pass w/ `RUN_REAL_ADAPTER_TESTS=1`)
-    - coverage on `app/`: **92.98 %** (≥ 80 % gate) ✅
-    - ruff + ruff-format + mypy strict: clean
-    - vitest: 36/36 ✅
-    - next lint + tsc + build: clean
-  - To bring up real Supabase + LINE + Anthropic later, flip `USE_MOCKS=false` per `docs/adapters.md` — no router changes required.
+- **Phase**: implementing
+- **Branch**: feat/real-adapter-wiring
+- **PR**: (TBD)
+- **Last action**: 2026-07-03T22:30:00Z
+- **Next action**: Run /implement T-101 (Real Supabase adapter)
+- **Notes**: Cycle 2 (real-adapter-wiring) approved. spec.md + plan.md committed.
+  5 tasks: T-101 (Supabase), T-102 (LINE), T-103 (Anthropic AI), T-104
+  (Storage), T-105 (live smoke + CI opt-in + docs). Real adapters use
+  httpx.MockTransport for tests; CI stays green. Live smoke opt-in via
+  RUN_LIVE_SMOKE=1 + workflow_dispatch. Starting T-101.
+  Cycle 1 (Month-1 MVP) merged via PR #1 + #2 on main.
 
-_Updated: 2026-07-03T22:10:00Z_
+_Updated: 2026-07-03T22:30:00Z_
