@@ -3,14 +3,14 @@
 - **Phase**: implementing
 - **Branch**: feat/multi-tenant-teams
 - **PR**: (TBD)
-- **Last action**: 2026-07-04T02:00:00Z
-- **Next action**: Run /implement T-302 (team CRUD + membership routes)
-- **Notes**: T-301 done. Schema migration (team_memberships +
-  team_invitations) committed; mock now enforces UNIQUE constraints
-  (token, (team_id, user_id)) and 9 new tests pass. 239 tests pass total
-  (+9 new), coverage 92.96% ✅.
-  Starting T-302: domain/team.py DTOs, /api/teams router, TeamService.
-  Routes: POST /api/teams, GET /api/teams/me, GET /api/teams/{id},
-  GET /api/teams/{id}/members. The first caller becomes owner.
+- **Last action**: 2026-07-04T02:30:00Z
+- **Next action**: Run /implement T-303 (member management — role/remove/leave)
+- **Notes**: T-301 + T-302 done. Schema migration landed; mock enforces
+  UNIQUE; teams router with POST/GET/GET/me/members/invitations + 8 new
+  tests; 247 tests pass, coverage 92.84% ✅.
+  Starting T-303: PATCH .../members/{user_id} (change role, owner-only),
+  DELETE .../members/{user_id} (remove, owner-only), POST .../leave
+  (self-remove, owner can't leave). Critical invariant: owner cannot
+  demote/remove themselves.
 
-_Updated: 2026-07-04T02:00:00Z_
+_Updated: 2026-07-04T02:30:00Z_
