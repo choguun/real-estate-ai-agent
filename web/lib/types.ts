@@ -47,6 +47,41 @@ export interface Property {
   updated_at: string | null;
 }
 
+/** Subset of Property fields the AI generator accepts in its request. */
+export interface PropertySummaryForAi {
+  title?: string | null;
+  property_type?: PropertyType | null;
+  price?: number | null;
+  size_sqm?: number | null;
+  bedrooms?: number | null;
+  bathrooms?: number | null;
+  floor?: number | null;
+  address?: string | null;
+  district?: string | null;
+  province?: string | null;
+  near_bts_mrt?: string | null;
+  foreign_quota?: boolean | null;
+}
+
+export type Platform = "ddproperty" | "livinginsider" | "facebook" | "general";
+
+export const PLATFORM_LABELS: Record<Platform, string> = {
+  ddproperty: "DDProperty",
+  livinginsider: "Livinginsider",
+  facebook: "Facebook",
+  general: "General",
+};
+
+export interface GeneratedContent {
+  platform: Platform;
+  title: string;
+  description: string;
+  hashtags: string[];
+  seo_keywords: string[];
+  ai_model: string;
+  prompt_used?: string | null;
+}
+
 export interface PropertyCreateInput {
   title?: string | null;
   description?: string | null;
