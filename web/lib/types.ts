@@ -25,6 +25,60 @@ export const PROPERTY_TYPE_LABELS_TH: Record<PropertyType, string> = {
   commercial: "อาคารพาณิชย์",
 };
 
+/** Thai-locale UI labels for the agent's lead workflow. */
+export type LeadStatus =
+  | "new"
+  | "contacted"
+  | "qualified"
+  | "viewing"
+  | "negotiation"
+  | "closed"
+  | "lost";
+
+export const LEAD_STATUS_LABELS_TH: Record<LeadStatus, string> = {
+  new: "ใหม่",
+  contacted: "ติดต่อแล้ว",
+  qualified: "มีศักยภาพ",
+  viewing: "นัดชม",
+  negotiation: "เจรจา",
+  closed: "ปิดดีล",
+  lost: "หลุด",
+};
+
+export interface Lead {
+  id: string;
+  user_id: string;
+  name: string | null;
+  phone: string | null;
+  email: string | null;
+  line_user_id: string | null;
+  source: string | null;
+  status: LeadStatus | string | null;
+  interest_type: string | null;
+  budget_min: number | null;
+  budget_max: number | null;
+  preferred_areas: string[] | null;
+  notes: string | null;
+  last_contacted_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface Message {
+  id: string;
+  lead_id: string | null;
+  user_id: string;
+  direction: "inbound" | "outbound" | string | null;
+  message_type: string | null;
+  content: string | null;
+  is_ai_generated: boolean | null;
+  created_at: string | null;
+}
+
+export interface LeadWithMessages extends Lead {
+  messages: Message[];
+}
+
 export interface Property {
   id: string;
   user_id: string;

@@ -18,8 +18,10 @@ from app.config import Settings, get_settings
 from app.routers.ai import router as ai_router
 from app.routers.auth import router as auth_router
 from app.routers.health import router as health_router
+from app.routers.leads import router as leads_router
 from app.routers.line_webhook import router as line_webhook_router
 from app.routers.listings import router as listings_router
+from app.routers.messages import router as messages_router
 from app.routers.properties import router as properties_router
 from app.routers.storage import router as storage_router
 
@@ -69,6 +71,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(ai_router)
     app.include_router(listings_router)
     app.include_router(line_webhook_router)
+    app.include_router(leads_router)
+    app.include_router(messages_router)
     return app
 
 
