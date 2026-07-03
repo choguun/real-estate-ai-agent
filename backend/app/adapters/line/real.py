@@ -32,9 +32,3 @@ class LineRealAdapter:
 
     def verify(self, body: bytes, signature: str) -> bool:
         return verify_line_webhook(body, signature, self._secret)
-
-    def send_reply(self, line_user_id: str, text: str) -> dict[str, object]:
-        raise NotImplementedError(
-            "LineRealAdapter.send_reply is not wired in MVP. "
-            "Set use_real_line=false (default) to use mocks."
-        )

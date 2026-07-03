@@ -3,22 +3,19 @@
 - **Phase**: implementing
 - **Branch**: feat/month-1-mvp
 - **PR**: 1
-- **Last action**: 2026-07-03T08:50:00Z
-- **Next action**: Run /implement T-008 (mock LINE + webhook signature verification)
+- **Last action**: 2026-07-03T09:00:00Z
+- **Next action**: Run /implement T-009 (LINE → Lead + Message pipeline, idempotent)
 - **Notes**:
-  - T-001 through T-007 ✅.
-  - T-007 ✅ listings persistence + detail page:
-    - 95/95 backend tests, 26/26 frontend tests, 94% coverage.
-    - Full close-the-loop: PropertyForm → generate → save property →
-      auto-save 4 listings → redirect to /properties/{id} → editor
-      per platform.
-    - PropertyForm auto-saves generated listings on submit; if save
-      fails, the property still exists (logged to console, surfaced
-      only on the detail page's regeneration button).
-    - Frontend widens `property_type` to `string` since the form holds
-      `""` as the empty value (the backend's PropertySummary accepts
-      any string and routes convert).
-  - 5 of 12 tasks remaining. Next: T-008 — LINE adapter + signed
-    webhook (security-critical; must verify HMAC before parsing).
+  - T-001 through T-008 ✅.
+  - T-008 ✅ mock LINE adapter + signed webhook:
+    - 107/107 backend tests, 94% coverage.
+    - Signature verified against **raw request bytes** via
+      `hmac.compare_digest`, BEFORE JSON parsing — the security
+      property cannot be bypassed by body tampering.
+    - 11 tests cover all rejection paths (missing/empty/wrong
+      secret/tampered body) AND verify no DB writes occur on unverified
+      requests (T-008's contract: gate-only, no event processing).
+  - 4 of 12 tasks remaining. Next: T-009 wires the verified events into
+    the lead + message pipeline (idempotency on event_id).
 
-_Updated: 2026-07-03T08:50:00Z_
+_Updated: 2026-07-03T09:00:00Z_
