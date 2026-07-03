@@ -3,13 +3,14 @@
 - **Phase**: implementing
 - **Branch**: feat/multi-tenant-teams
 - **PR**: (TBD)
-- **Last action**: 2026-07-04T01:30:00Z
-- **Next action**: Run /implement T-301 (schema migration + mock team scoping)
-- **Notes**: Cycle 3 (multi-tenant-teams) approved. spec.md + plan.md committed.
-  8 tasks: T-301 (schema + mock), T-302 (team CRUD), T-303 (member mgmt),
-  T-304 (re-scope existing routers by team_id — L), T-305 (Supabase RLS +
-  live smoke), T-306 (frontend team page), T-307 (invite email + accept),
-  T-308 (test suite update + docs). AC-MT-01..12, ST-MT-01..12.
-  Cycles 1 + 2 merged (PRs #1, #2, #3). Starting T-301.
+- **Last action**: 2026-07-04T02:00:00Z
+- **Next action**: Run /implement T-302 (team CRUD + membership routes)
+- **Notes**: T-301 done. Schema migration (team_memberships +
+  team_invitations) committed; mock now enforces UNIQUE constraints
+  (token, (team_id, user_id)) and 9 new tests pass. 239 tests pass total
+  (+9 new), coverage 92.96% ✅.
+  Starting T-302: domain/team.py DTOs, /api/teams router, TeamService.
+  Routes: POST /api/teams, GET /api/teams/me, GET /api/teams/{id},
+  GET /api/teams/{id}/members. The first caller becomes owner.
 
-_Updated: 2026-07-04T01:30:00Z_
+_Updated: 2026-07-04T02:00:00Z_
