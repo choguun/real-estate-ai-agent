@@ -1,25 +1,14 @@
-"""Lead domain — Pydantic DTOs and enums."""
+"""Lead domain — Pydantic DTOs for the leads table."""
 
 from __future__ import annotations
 
-from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
-
-
-class LeadStatus(str, Enum):
-    new = "new"
-    contacted = "contacted"
-    qualified = "qualified"
-    viewing = "viewing"
-    negotiation = "negotiation"
-    closed = "closed"
-    lost = "lost"
+from pydantic import BaseModel, ConfigDict
 
 
 class Lead(BaseModel):
-    """A lead row, scoped to a user (agent)."""
+    """A lead row — passed through from the Supabase adapter without transformation."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -44,19 +33,3 @@ class Lead(BaseModel):
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> Lead:
         return cls(**row)
-
-
-class LeadUpdate(BaseModel):
-    """Partial update for PATCH /api/leads/{id}."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    name: str | None = Field(default=None, max_length=200)
-    phone: str | None = Field(default=None, max_length=50)
-    email: str | None = Field(default=None, max_length=320)
-    status: LeadStatus | None = None
-    notes: str | None = Field(default=None, max_length=2000)
-    interest_type: str | None = Field(default=None, max_length=100)
-    budget_min: float | None = Field(default=None, ge=0)
-    budget_max: float | None = Field(default=None, ge=0)
-    preferred_areas: list[str] | None = None
