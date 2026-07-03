@@ -18,6 +18,7 @@ from app.config import Settings, get_settings
 from app.routers.ai import router as ai_router
 from app.routers.auth import router as auth_router
 from app.routers.health import router as health_router
+from app.routers.listings import router as listings_router
 from app.routers.properties import router as properties_router
 from app.routers.storage import router as storage_router
 
@@ -65,6 +66,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(properties_router)
     app.include_router(storage_router)
     app.include_router(ai_router)
+    app.include_router(listings_router)
     return app
 
 
