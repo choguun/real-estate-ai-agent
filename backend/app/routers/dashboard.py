@@ -3,7 +3,7 @@
 Three blocks for /api/dashboard:
 1. `new_leads_count` — number of leads with status='new' for the caller
 2. `recent_inbound` — last 20 inbound messages, each enriched with lead meta
-3. `recent_properties` — last 5 properties (newest by updated_at, archived hidden)
+3. `recent_properties` — last 5 properties (newest by updated_at)
 
 This endpoint is polled by the dashboard page every 5 s in MVP
 (no WebSockets). The contract is small and stable so we can cache it
@@ -28,11 +28,6 @@ def get_dashboard(db: DBDep, user_id: CurrentUserIdDep) -> dict[str, Any]:
     new_leads_count = sum(1 for ld in all_leads if ld.get("status") == "new")
 
     # 2. Recent inbound messages (last 20), enriched with lead preview.
-    # Build a {lead_id -> lead} dict in one query to avoid N+1 on real DB.
-    leads_by_id: dict[str, dict[str, Any]] = {
-        ld["id"]: ld for ld in all_leads if isinstance(ld.get("id"), str)
-    }
-
     inbound = [
         m
         for m in db.query("messages", filters={"user_id": user_id})
@@ -47,12 +42,8 @@ def get_dashboard(db: DBDep, user_id: CurrentUserIdDep) -> dict[str, Any]:
         lead_id = m.get("lead_id")
         lead_preview: dict[str, Any] | None = None
         if lead_id:
-            row = leads_by_id.get(lead_id)
-            # Defense-in-depth: re-check ownership even though all_leads
-            # is already user-scoped. If a future code path inserts a
-            # message whose lead belongs to another user, this guard
-            # prevents leaking that lead's name / line_user_id.
-            if row is not None and row.get("user_id") == user_id:
+            row = db.get_by_id("leads", lead_id)
+            if row:
                 lead_preview = {
                     "id": row.get("id"),
                     "name": row.get("name"),
