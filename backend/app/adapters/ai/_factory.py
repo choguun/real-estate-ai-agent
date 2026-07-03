@@ -5,6 +5,9 @@ Returns a list of adapters in priority order:
 2. Gemini (fallback)   — always wired (real client is a stub for MVP).
 
 The ListingGeneratorService walks this list until one succeeds.
+
+`use_mocks=True` is the master switch — even if `use_real_ai` is also set,
+the mock chain wins. Document in `docs/adapters.md`.
 """
 
 from __future__ import annotations
@@ -19,18 +22,19 @@ from app.config import Settings, get_settings
 
 def build_ai_chain(settings: Settings | None = None) -> list[AiAdapter]:
     settings = settings or get_settings()
-    chain: list[AiAdapter] = []
 
-    if settings.use_real_ai:
-        chain.append(
-            AnthropicRealAdapter(api_key=settings.anthropic_api_key, model=settings.anthropic_model)
-        )
-    else:
-        chain.append(AnthropicMockAdapter())
+    # Master switch: mocks win even when real is requested.
+    if settings.use_mocks:
+        return [AnthropicMockAdapter(), GeminiMockAdapter()]
 
-    chain.append(
+    primary = (
+        AnthropicRealAdapter(api_key=settings.anthropic_api_key, model=settings.anthropic_model)
+        if settings.use_real_ai
+        else AnthropicMockAdapter()
+    )
+    fallback = (
         GeminiRealAdapter(api_key=settings.gemini_api_key, model=settings.gemini_model)
         if settings.use_real_ai
         else GeminiMockAdapter()
     )
-    return chain
+    return [primary, fallback]

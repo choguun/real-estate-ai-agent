@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, status
 
 from app.adapters.line.base import SIGNATURE_HEADER, verify_line_webhook
-from app.deps import DBDep
+from app.deps import DBDep, SettingsDep
 from app.services.lead_pipeline import LeadPipeline
 
 logger = logging.getLogger(__name__)
@@ -20,11 +20,10 @@ router = APIRouter(tags=["line"])
 @router.post("/webhook/line")
 async def line_webhook(
     request: Request,
+    settings: SettingsDep,
     db: DBDep,
 ) -> dict[str, Any]:
-    settings = request.app.state.settings
-
-    # 1. Read raw body bytes BEFORE parsing.
+    # 1. Read raw body bytes BEFORE any JSON parsing.
     body = await request.body()
 
     # 2. Read & verify the signature.
@@ -52,8 +51,8 @@ async def line_webhook(
 
     # 4. Only resolve an agent if there are events to process.
     if events:
-        agent_id = settings.line_default_agent_id
-        if not agent_id:
+        agent_id: str | None = settings.line_default_agent_id
+        if agent_id is None:
             candidates = db.query("users", filters={"is_active": True})
             if not candidates:
                 logger.error("LINE webhook: no agent (no LINE_DEFAULT_AGENT_ID and no users in DB)")

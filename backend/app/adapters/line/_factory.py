@@ -9,7 +9,12 @@ from app.config import Settings, get_settings
 
 
 def get_line_adapter(settings: Settings | None = None) -> LineAdapter:
+    """Pick LINE adapter. `use_mocks=True` is the master switch and
+    forces the mock regardless of `use_real_line`.
+    """
     settings = settings or get_settings()
+    if settings.use_mocks:
+        return LineMockAdapter(channel_secret=settings.line_channel_secret)
     if settings.use_real_line:
         return LineRealAdapter(
             channel_secret=settings.line_channel_secret,

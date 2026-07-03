@@ -48,6 +48,7 @@ export const LEAD_STATUS_LABELS_TH: Record<LeadStatus, string> = {
 export interface Lead {
   id: string;
   user_id: string;
+  team_id: string | null;
   name: string | null;
   phone: string | null;
   email: string | null;
@@ -82,6 +83,7 @@ export interface LeadWithMessages extends Lead {
 export interface Property {
   id: string;
   user_id: string;
+  team_id: string | null;
   title: string | null;
   description: string | null;
   property_type: PropertyType | string | null;

@@ -1,11 +1,41 @@
+"use client";
+
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 
+import { getAuthToken } from "@/lib/api";
+
 /**
- * Auth-gated shell for the (app) route group. Pages under this group are
- * client components that handle token checks themselves before fetching;
- * this layout provides the chrome (nav, container) only.
+ * Auth-gated shell for the (app) route group.
+ *
+ * Every page under (app)/ runs through this layout. If the JWT is
+ * missing, we redirect to /login before rendering anything. This
+ * closes the deep-link foot-gun where /properties/new or /properties/[id]
+ * could be reached with no token at all.
  */
 export default function AppLayout({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
+  const [authed, setAuthed] = useState(false);
+
+  useEffect(() => {
+    if (!getAuthToken()) {
+      router.replace("/login");
+      return;
+    }
+    setAuthed(true);
+  }, [router]);
+
+  if (!authed) {
+    return (
+      <div className="min-h-screen">
+        <div className="mx-auto max-w-md px-6 py-20">
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen">
       <header className="border-b bg-card">

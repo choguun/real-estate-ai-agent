@@ -44,7 +44,7 @@ def send_reply(
             detail="Lead has no LINE user id; manual outbound not supported in MVP",
         )
 
-    adapter_response = line.send_reply(line_user_id, payload.text)  # type: ignore[attr-defined]
+    adapter_response = line.send_reply(line_user_id, payload.text)
 
     msg = _send_message(db, user_id=user_id, lead_id=lead_id, content=payload.text)
 
