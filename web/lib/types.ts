@@ -136,6 +136,23 @@ export interface GeneratedContent {
   prompt_used?: string | null;
 }
 
+/** Aggregated dashboard payload returned by /api/dashboard. */
+export interface DashboardLeadPreview {
+  id: string;
+  name: string | null;
+  line_user_id: string | null;
+}
+
+export interface DashboardInboundMessage extends Message {
+  lead: DashboardLeadPreview | null;
+}
+
+export interface DashboardData {
+  new_leads_count: number;
+  recent_inbound: DashboardInboundMessage[];
+  recent_properties: Property[];
+}
+
 /** Persisted version of a generated listing (one row per (property, platform)). */
 export interface SavedListing extends GeneratedContent {
   id: string;
