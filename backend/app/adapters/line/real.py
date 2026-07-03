@@ -18,13 +18,10 @@ from __future__ import annotations
 import time
 
 from app.adapters.line.base import (
+    REPLY_TOKEN_TTL_SECONDS,
     sign_line_webhook,
     verify_line_webhook,
 )
-
-# Real Reply-token lifetime per LINE docs — about 60s, the adapter
-# caches them off the most recent inbound message.
-REPLY_TOKEN_TTL_SECONDS = 60
 
 
 class LineRealAdapter:
