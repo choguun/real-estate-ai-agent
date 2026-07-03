@@ -102,6 +102,15 @@ class MockSupabaseAdapter:
         if "id" not in row or row["id"] is None:
             row["id"] = _default_id(table_def)
 
+        # Enforce UNIQUE constraints declared on the table.
+        for constraint in table_def.unique_constraints:
+            existing = self.query(table, filters={c: row.get(c) for c in constraint})
+            if existing:
+                raise ValueError(
+                    f"UNIQUE constraint violation on {table}{constraint} "
+                    f"(row={row.get(constraint[0])!r})"
+                )
+
         self._rows[table].append(row)
         # Maintain the by-id index. If id is non-unique, last-wins.
         self._by_id[table][row["id"]] = row

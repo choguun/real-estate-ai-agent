@@ -71,11 +71,12 @@ MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
 
 def test_sql_matches_mock_schema_tables() -> None:
     """If a table exists in SQL, it must exist in the mock (and vice versa)."""
-    sql_path = MIGRATIONS_DIR / "001_init.sql"
-    assert sql_path.exists(), "migrations/001_init.sql must exist for the real Supabase DB"
-    sql = sql_path.read_text()
-
-    sql_tables = set(re.findall(r"CREATE TABLE\s+(\w+)", sql))
+    sql_files = sorted(MIGRATIONS_DIR.glob("*.sql"))
+    assert sql_files, "at least one migrations/*.sql file must exist"
+    sql_tables: set[str] = set()
+    for sql_path in sql_files:
+        sql = sql_path.read_text()
+        sql_tables.update(re.findall(r"CREATE TABLE\s+(\w+)", sql))
     mock_tables = set(DEFAULT_SCHEMA.table_names)
 
     assert mock_tables == sql_tables, (
