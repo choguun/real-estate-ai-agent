@@ -31,8 +31,8 @@ export async function liffLogin(line_user_id: string, display_name?: string): Pr
   return res;
 }
 
-export async function fetchMe(): Promise<User> {
-  return apiGet<User>("/api/auth/me");
+export async function fetchMe(options?: { signal?: AbortSignal }): Promise<User> {
+  return apiGet<User>("/api/auth/me", { signal: options?.signal });
 }
 
 export function describeAuthError(err: unknown): string {

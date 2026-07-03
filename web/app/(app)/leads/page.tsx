@@ -76,16 +76,15 @@ export default function LeadsPage() {
         </div>
       </header>
 
-      <div role="tablist" className="mb-6 flex flex-wrap gap-2 border-b pb-2">
+      <div role="group" aria-label="Filter leads by status" className="mb-6 flex flex-wrap gap-2 border-b pb-2">
         {STATUS_FILTERS.map((s) => (
           <button
             key={s.label}
             type="button"
-            role="tab"
-            aria-selected={filter === s.value}
+            aria-pressed={filter === s.value}
             data-testid={`filter-${s.value ?? "all"}`}
             onClick={() => setFilter(s.value)}
-            className={`rounded-full px-3 py-1 text-xs transition ${
+            className={`rounded-full px-3 py-1 text-xs transition aria-pressed:font-semibold ${
               filter === s.value
                 ? "bg-primary text-primary-foreground"
                 : "border bg-card hover:bg-accent"

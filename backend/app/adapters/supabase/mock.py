@@ -118,9 +118,12 @@ class MockSupabaseAdapter:
         if row is None:
             return None
         row.update(patch)
-        # Re-stamp updated_at when the schema has one.
+        # Re-stamp updated_at when the schema has one. (Same helper as
+        # `_schema.py`; centralized there.)
         if self._schema.get(table).has("updated_at"):
-            row["updated_at"] = _now()
+            from app.adapters.supabase._schema import now_iso
+
+            row["updated_at"] = now_iso()
         return copy.deepcopy(row)
 
     def delete(self, table: str, id: str) -> bool:

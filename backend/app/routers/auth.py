@@ -68,6 +68,8 @@ def signup(payload: SignupIn, svc: AuthServiceDep) -> dict[str, object]:
 
 @router.post("/login", response_model=AuthResponse)
 def login(payload: LoginIn, svc: AuthServiceDep) -> dict[str, object]:
+    # TODO(security): add a rate limiter (e.g. slowapi, Redis counter) before
+    # any non-dev exposure. Today /api/auth/login is brute-forceable.
     try:
         return svc.login(email=payload.email, password=payload.password)
     except Exception as exc:

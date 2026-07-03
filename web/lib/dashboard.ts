@@ -3,6 +3,6 @@
 import { apiGet } from "./api";
 import type { DashboardData } from "./types";
 
-export async function getDashboard(): Promise<DashboardData> {
-  return apiGet<DashboardData>("/api/dashboard");
+export async function getDashboard(options?: { signal?: AbortSignal }): Promise<DashboardData> {
+  return apiGet<DashboardData>("/api/dashboard", { signal: options?.signal });
 }

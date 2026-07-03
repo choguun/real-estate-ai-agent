@@ -28,9 +28,17 @@ def _uuid() -> str:
     return str(uuid.uuid4())
 
 
-def _now() -> str:
-    """ISO 8601 UTC timestamp with timezone suffix."""
+def now_iso() -> str:
+    """ISO 8601 UTC timestamp with timezone suffix.
+
+    Public helper — used by `mock.py` for `updated_at` re-stamping and
+    anywhere else we need the canonical timestamp format.
+    """
     return datetime.now(timezone.utc).isoformat()
+
+
+# Internal alias preserved for the table definitions below.
+_now = now_iso
 
 
 def _true() -> bool:
