@@ -7,7 +7,6 @@ import type { Property } from "@/lib/types";
 const baseProperty: Property = {
   id: "p-1",
   user_id: "u-1",
-  team_id: null,
   title: "คอนโดใจกลางกรุงเทพ",
   description: null,
   property_type: "condo",
