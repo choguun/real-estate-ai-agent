@@ -1,0 +1,50 @@
+# ─── Python ─────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+backend/venv/
+backend/.venv/
+backend/.pytest_cache/
+backend/.ruff_cache/
+backend/.mypy_cache/
+backend/htmlcov/
+backend/.coverage
+backend/coverage.xml
+
+# ─── Node / Next.js ────────────────────────────────────
+node_modules/
+.next/
+out/
+build/
+dist/
+
+# Frontend tests
+coverage/
+playwright-report/
+test-results/
+
+# ─── Env / secrets ──────────────────────────────────────
+.env
+.env.local
+.env.development
+.env.production
+.env.*.local
+!.env.example
+
+# ─── IDE / OS ───────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+*.swp
+
+# ─── Build artefacts ────────────────────────────────────
+*.log
+*.tsbuildinfo
+next-env.d.ts
+
+# ─── AIDLC runtime state ────────────────────────────────
+.aidlc/*.local.json
