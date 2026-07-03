@@ -134,7 +134,7 @@ def test_invite_only_owner_can_invite() -> None:
     team = client.post("/api/teams", json={"name": "Strict"}, headers=_auth(owner_token)).json()
     team_id = team["id"]
     # Invite an agent
-    invite = client.post(
+    client.post(
         f"/api/teams/{team_id}/invitations",
         json={"email": "agent@x.com", "role": "agent"},
         headers=_auth(owner_token),

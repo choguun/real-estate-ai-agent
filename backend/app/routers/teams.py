@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Response, status
 
 from app.adapters.supabase import SupabaseAdapter
 from app.deps import CurrentUserIdDep, DBDep
@@ -111,8 +113,6 @@ def invite_member(
     ):
         raise HTTPException(status_code=409, detail="user is already a team member")
 
-    from datetime import datetime, timedelta, timezone
-
     token = generate_invite_token()
     invitation = supabase.insert(
         "team_invitations",
@@ -126,3 +126,125 @@ def invite_member(
         },
     )
     return InvitationOut.model_validate({**invitation, "invite_url": f"/invite/{token}"})
+
+
+# ── T-303: Member management (role change + remove + leave) ──
+
+
+@router.patch(
+    "/{team_id}/members/{member_user_id}",
+    response_model=TeamMemberOut,
+)
+def change_member_role(
+    team_id: UUID,
+    member_user_id: UUID,
+    payload: dict[str, Any],
+    user_id: CurrentUserIdDep,
+    supabase: DBDep,
+) -> TeamMemberOut:
+    """ST-MT-06: Owner changes a member's role. Cannot demote owner."""
+    actor_role = user_role_in_team(supabase, user_id=UUID(user_id), team_id=team_id)
+    if actor_role != "owner":
+        raise HTTPException(status_code=403, detail="only owners can change roles")
+    new_role = payload.get("role")
+    if new_role not in ("owner", "admin", "agent"):
+        raise HTTPException(status_code=422, detail="invalid role")
+
+    # Critical: owner cannot demote themselves
+    if str(member_user_id) == user_id and new_role != "owner":
+        raise HTTPException(status_code=409, detail="owner cannot demote themselves")
+
+    # Update the membership row
+    memberships = supabase.query(
+        "team_memberships",
+        filters={"team_id": str(team_id), "user_id": str(member_user_id)},
+    )
+    if not memberships or memberships[0].get("left_at") is not None:
+        raise HTTPException(status_code=404, detail="member not found")
+    updated = supabase.update(
+        "team_memberships",
+        str(memberships[0]["id"]),
+        {"role": new_role},
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="member not found")
+
+    # Return the updated member shape
+    user = supabase.get_by_id("users", str(member_user_id))
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    return TeamMemberOut.model_validate(
+        {
+            "id": updated["id"],
+            "team_id": updated["team_id"],
+            "user_id": updated["user_id"],
+            "email": user["email"],
+            "full_name": user["full_name"],
+            "role": updated["role"],
+            "joined_at": updated["joined_at"],
+            "left_at": updated.get("left_at"),
+        }
+    )
+
+
+@router.delete(
+    "/{team_id}/members/{member_user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+def remove_member(
+    team_id: UUID,
+    member_user_id: UUID,
+    user_id: CurrentUserIdDep,
+    supabase: DBDep,
+) -> Response:
+    """ST-MT-07: Owner removes a member (soft-delete via left_at)."""
+    actor_role = user_role_in_team(supabase, user_id=UUID(user_id), team_id=team_id)
+    if actor_role != "owner":
+        raise HTTPException(status_code=403, detail="only owners can remove members")
+    if str(member_user_id) == user_id:
+        raise HTTPException(status_code=409, detail="owner cannot remove themselves")
+
+    memberships = supabase.query(
+        "team_memberships",
+        filters={"team_id": str(team_id), "user_id": str(member_user_id)},
+    )
+    if not memberships or memberships[0].get("left_at") is not None:
+        raise HTTPException(status_code=404, detail="member not found")
+    supabase.update(
+        "team_memberships",
+        str(memberships[0]["id"]),
+        {
+            "left_at": datetime.now(timezone.utc).isoformat(),
+            "removed_by": user_id,
+        },
+    )
+    return Response(status_code=204)
+
+
+@router.post("/{team_id}/leave", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+def leave_team(
+    team_id: UUID,
+    user_id: CurrentUserIdDep,
+    supabase: DBDep,
+) -> Response:
+    """ST-MT-08: Self-remove. Owner cannot leave (must delete team or transfer)."""
+    actor_role = user_role_in_team(supabase, user_id=UUID(user_id), team_id=team_id)
+    if actor_role is None:
+        raise HTTPException(status_code=404, detail="not a member of this team")
+    if actor_role == "owner":
+        raise HTTPException(
+            status_code=409,
+            detail="owner cannot leave the team (delete the team or transfer ownership first)",
+        )
+    memberships = supabase.query(
+        "team_memberships",
+        filters={"team_id": str(team_id), "user_id": user_id},
+    )
+    if memberships and memberships[0].get("left_at") is None:
+        supabase.update(
+            "team_memberships",
+            str(memberships[0]["id"]),
+            {"left_at": datetime.now(timezone.utc).isoformat()},
+        )
+    return Response(status_code=204)
