@@ -1,32 +1,37 @@
 # AIDLC State
 
-- **Phase**: shipping
-- **Branch**: feat/multi-tenant-teams
-- **PR**: [#4 Cycle 3 — Multi-tenant teams with RLS](https://github.com/choguun/real-estate-ai-agent/pull/4) (open, review posted, P1s addressed)
-- **Last action**: 2026-07-04T04:30:00Z
-- **Next action**: /ship (merge to main, delete branch)
+- **Phase**: shipped
+- **Branch**: (none — feat/multi-tenant-teams merged + deleted)
+- **PR**: [#4 Cycle 3 — Multi-tenant teams with RLS](https://github.com/choguun/real-estate-ai-agent/pull/4) MERGED · merge commit `e06748d`
+- **Last action**: 2026-07-04T04:45:00Z
+- **Next action**: Start a new AIDLC cycle for the next feature
 - **Notes**:
-  - 🎉 **Cycle 3 (multi-tenant teams) complete** — all 8 tasks shipped + 4 P1s addressed.
-  - **/review done**: 5-axis review posted as PR comment.
-    0 P0, 4 P1 (all addressed in `bce3004`), 12 P2 (advisory).
-  - **P1-W1 (listings)**: re-scoped user_id → team_id. Was the only
-    router missed in T-304 cutover; within-team sharing + cross-team
-    isolation both fixed.
-  - **P1-W2 (dashboard)**: now team-scoped. New-leads count, recent
-    messages, recent properties all use the caller's team.
-  - **P1-W3 (LINE webhook)**: routing priority is now
-    `LINE_DEFAULT_TEAM_ID` → `LINE_DEFAULT_AGENT_ID` → first active
-    user. Plus restored 3 fields the cycle-1 code was using
-    (`use_real_supabase`/`_line`/`_ai`, model names, etc.) so the
-    cycle 1+2 wiring keeps working.
-  - **P1-W4 (stale comment)**: dashboard comment now reflects
-    team-scoped framing.
-  - **Final verification:**
+  - 🎉 **Cycle 3 (multi-tenant teams with RLS) shipped to main via PR #4.**
+  - 8 tasks (T-301..T-308) + 4 P1s from /review addressed in `bce3004`.
+  - **Final verification (post-merge, on `main`):**
     - pytest: 260 pass, 12 skipped, 0 failed
-    - coverage: 92.84% (≥ 80% gate) ✅
-    - ruff + ruff-format + mypy strict: clean
-    - vitest: 36/36 ✅
-  - **All 12 acceptance criteria (AC-MT-01..12) covered**
-  - 23 commits on feat/multi-tenant-teams
+    - coverage on `app/`: 92.36% (≥ 80% gate) ✅
+    - ruff + ruff-format + mypy strict: clean (61 source files)
+    - vitest: 36/36
+    - AC-MT-01..12: all 12 covered
+    - 5-axis /review: 0 P0, 4 P1 (all addressed), 12 P2 (advisory)
+  - To bring up real Supabase in production: apply
+    `backend/migrations/002_teams.sql` + `002_rls.sql`, set
+    `SUPABASE_URL` + `LINE_DEFAULT_TEAM_ID` + `ANTHROPIC_API_KEY` per
+    [`docs/production-deploy.md`](./docs/production-deploy.md). Zero
+    router changes required (AC-MT-08 honored).
+  - **AIDLC cycle closed.** 3 cycles shipped so far:
+    - Cycle 1: Month-1 MVP (PR #1, #2)
+    - Cycle 2: Real adapter wiring (PR #3)
+    - Cycle 3: Multi-tenant teams with RLS (PR #4)
+  - **Next cycle candidates:**
+    - Cycle 4: Per-seat billing (Stripe webhook + plan limits)
+    - Cycle 4: Audit log UI (the `audit_logs` table is already there)
+    - Cycle 4: Team deletion + ownership transfer
+    - Cycle 5: WebSockets for real-time messaging
+    - Cycle 5: Image vision (Claude Vision API)
+    - Cycle 5+: Auto-posting, observability, i18n, mobile, contracts,
+      Google Calendar sync, CRM analytics
+  - Run `git log --stat main..e06748d` to see all 24 commits in the cycle.
 
-_Updated: 2026-07-04T04:30:00Z_
+_Updated: 2026-07-04T04:45:00Z_
