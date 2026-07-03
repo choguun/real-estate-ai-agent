@@ -3,22 +3,17 @@
 - **Phase**: implementing
 - **Branch**: feat/month-1-mvp
 - **PR**: 1
-- **Last action**: 2026-07-03T07:30:00Z
-- **Next action**: Run /implement T-004 (properties CRUD + list page)
+- **Last action**: 2026-07-03T07:50:00Z
+- **Next action**: Run /implement T-005 (mock storage adapter + property NEW form with image upload)
 - **Notes**:
   - T-001 ✅ scaffold + /health + CI.
-  - T-002 ✅ mock Supabase adapter + Protocol + factory + canonical SQL.
-  - T-003 ✅ auth: signup / login / LIFF / /me, bcrypt + JWT (HS256),
-          /login & /signup pages with LINE LIFF stub button,
-          (app)/dashboard placeholder for auth round-trip.
-    - **Bug found + fixed during E2E:** `MockSupabaseAdapter` was per-request,
-      so /signup-created users vanished by the time /me was called. Resolution:
-      `_factory._get_or_init_mock()` is now a thread-safe process singleton.
-      Tests still work because they use FastAPI `dependency_overrides`.
-    - Schema tiny change: added `password_hash TEXT` to `users` for bcrypt
-      storage. SQL ↔ mock parity test still passes.
-    - 40/40 backend tests, 9/9 frontend tests. Coverage 94% on `app/`.
-  - 9 of 12 tasks remaining. Next: T-004 properties (CRUD needs auth, the
-    first auth-gated router).
+  - T-002 ✅ mock Supabase adapter.
+  - T-003 ✅ auth (signup/login/LIFF/JWT/me) + auth pages.
+  - T-004 ✅ properties CRUD + scoped list page.
+    - 56/56 backend tests, 14/14 frontend tests, 94% coverage.
+    - E2E curl: signup → create condo → list → archive → list filtered.
+    - Cross-user isolation verified: 404 (not 403) on all reads/writes.
+  - 8 of 12 tasks remaining. T-005 storage adapter comes next; once it lands
+    we can wire image upload into the property form.
 
-_Updated: 2026-07-03T07:30:00Z_
+_Updated: 2026-07-03T07:50:00Z_
