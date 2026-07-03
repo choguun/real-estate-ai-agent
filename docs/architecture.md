@@ -8,32 +8,35 @@ Real Estate AI Agent (Thailand) — Month-1 MVP. Two services, one database (moc
 ┌─────────────────────────────────────────────────────────────┐
 │                          web/ (Next.js 15)                   │
 │  Server components · Client components · shadcn/ui-like     │
-│  App router groups: (marketing) (auth) (app)                │
-│  lib/: api.ts · auth.ts · properties.ts · listings.ts ·     │
-│         uploads.ts · leads.ts · messages.ts · dashboard.ts │
+│  App router groups: (auth) (app)  (landing page at app root)  │
+│  lib/: api.ts · auth.ts · dashboard.ts · leads.ts · listings.ts │
+│       messages.ts · properties.ts · types.ts · uploads.ts · utils.ts │
 └──────────────────────────┬──────────────────────────────────┘
                            │ HTTPS, JSON over HTTP, JWT bearer
                            │ (and multipart for image upload)
 ┌──────────────────────────▼──────────────────────────────────┐
 │                       backend/ (FastAPI)                    │
-│  Routers  : auth · properties · listings · storage · ai ·    │
-│             line_webhook · dashboard · leads · messages     │
-│  Services : auth · listing_generator · lead_pipeline        │
+│  Routers  : ai · auth · dashboard · health · leads ·         │
+│             line_webhook · listings · messages · properties · │
+│             storage                                          │
+│  Services : auth · lead_pipeline · listing_generator        │
 │  Domain   : user · property · listing · lead · message      │
-│  Deps     : DBDep · StorageDep · AIChainDep · LineDep · …   │
+│  Deps     : DBDep · StorageDep · AIChainDep · LineDep ·    │
+│             SettingsDep · CurrentUserIdDep                   │
 └──────────────────────────┬──────────────────────────────────┘
                            │ Protocol boundary
 ┌──────────────────────────▼──────────────────────────────────┐
 │                app/adapters/{supabase,ai,line,storage}      │
 │                                                             │
 │  Each integration has TWO implementations behind one        │
-│  Protocol. Mock used in dev/tests by default; real          │
-│  client flips in via env flags. The router never knows.    │
+│  Protocol. Mocks used in dev/tests by default; real         │
+│  clients flip in via env flags (USE_MOCKS is the master   │
+│  switch and overrides every USE_REAL_*).                   │
 │                                                             │
 │  { supabase │ ai │ line │ storage }                         │
 │      ├── base.py        Protocol + DTOs                    │
 │      ├── mock.py        in-memory / local-disk             │
-│      ├── _real.py       httpx to real service               │
+│      ├── <real>.py      httpx to real service               │
 │      └── _factory.py    picks by Settings flag              │
 └─────────────────────────────────────────────────────────────┘
 ```
