@@ -257,7 +257,6 @@ def test_factory_returns_mock_by_default() -> None:
 def test_factory_returns_real_when_flag_set() -> None:
     settings = Settings(
         use_real_supabase=True,
-        use_mocks=False,  # master switch off so the real path is reachable
         supabase_url="http://example.supabase.co",
         supabase_anon_key="test-anon",
         supabase_service_role_key="test-svc",
@@ -265,19 +264,6 @@ def test_factory_returns_real_when_flag_set() -> None:
     adapter = get_db(settings=settings)
     assert isinstance(adapter, RealSupabaseAdapter)
     assert isinstance(adapter, SupabaseAdapter)
-
-
-def test_factory_master_switch_overrides_real_flag() -> None:
-    """use_mocks=True wins even when use_real_supabase=True is set."""
-    settings = Settings(
-        use_real_supabase=True,
-        use_mocks=True,
-        supabase_url="http://example.supabase.co",
-        supabase_anon_key="test-anon",
-        supabase_service_role_key="test-svc",
-    )
-    adapter = get_db(settings=settings)
-    assert isinstance(adapter, MockSupabaseAdapter)
 
 
 # ─── Update auto-timestamp ────────────────────────────────────────────
