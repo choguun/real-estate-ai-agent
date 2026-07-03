@@ -1,11 +1,23 @@
 # AIDLC State
 
-- **Phase**: shipped
+- **Phase**: shipping
 - **Branch**: feat/real-adapter-wiring
-- **PR**: (TBD — push branch + open PR)
-- **Last action**: 2026-07-04T00:30:00Z
-- **Next action**: Push branch + open PR; /review + /ship
+- **PR**: [#3 Cycle 2 — Real adapter wiring](https://github.com/choguun/real-estate-ai-agent/pull/3) (open, 9 commits)
+- **Last action**: 2026-07-04T01:00:00Z
+- **Next action**: /ship (merge to main, delete branch)
 - **Notes**:
+  - /review complete: 5-axis review posted as PR comment.
+    0 P0, 3 P1, 6 P2 — approve-with-minor-warnings.
+  - P1s all addressed in `147bb82`:
+    * P1-W1: Supabase `_safe_json` helper (typed error on malformed
+      body, dict→list coercion)
+    * P1-W2: Storage `get()` raises `StorageDownloadError` on 5xx
+      (no longer silent None)
+    * P1-W3: LINE `get_bot_user_id` 24h TTL (OA re-registration refresh)
+  - Post-fix verification: 230 tests pass (+6 new), 10 skipped,
+    0 failed; coverage still 93.04% ✅; ruff + mypy + format clean.
+  - P2s (timeout consistency, magic numbers, retry/backoff, async
+    variants, anthropic pin) deferred to follow-up.
   - 🎉 **Cycle 2 (real-adapter-wiring) complete** — all 5 tasks shipped.
   - All 4 real adapters now wire to real services via httpx:
     * Supabase DB → PostgREST CRUD with typed PermissionError
