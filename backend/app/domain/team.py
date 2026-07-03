@@ -95,7 +95,7 @@ class InvitationAcceptOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
     team_id: UUID
-    user: User
+    user: User  # noqa: F821
 
 
 # Late import to resolve the forward ref

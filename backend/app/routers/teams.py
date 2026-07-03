@@ -9,14 +9,18 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Response, status
 
 from app.adapters.supabase import SupabaseAdapter
-from app.deps import CurrentUserIdDep, DBDep
+from app.deps import CurrentUserIdDep, DBDep, EmailDep
 from app.domain.team import (
+    InvitationAcceptIn,
+    InvitationAcceptOut,
     InvitationCreate,
     InvitationOut,
     TeamCreate,
     TeamMemberOut,
     TeamOut,
 )
+from app.domain.user import User  # noqa: E402
+from app.services.auth import create_access_token, hash_password
 from app.services.team_service import (
     create_team,
     generate_invite_token,
@@ -30,7 +34,6 @@ router = APIRouter(prefix="/api/teams", tags=["teams"])
 
 
 def _require_member(adapter: SupabaseAdapter, *, user_id: UUID, team_id: UUID) -> None:
-    """Raise 403 if `user_id` is not an active member of `team_id`."""
     if not user_is_member(adapter, user_id=user_id, team_id=team_id):
         raise HTTPException(status_code=403, detail="not a member of this team")
 
@@ -64,7 +67,6 @@ def get_team(
     user_id: CurrentUserIdDep,
     supabase: DBDep,
 ) -> TeamOut:
-    """Get a team the caller is a member of. 403 if not a member."""
     _require_member(supabase, user_id=UUID(user_id), team_id=team_id)
     team = supabase.get_by_id("teams", str(team_id))
     if team is None:
@@ -84,7 +86,7 @@ def list_team_members(
     return [TeamMemberOut.model_validate(r) for r in rows]
 
 
-# ── Invitations (token generation lives here; accept flow in T-307) ──
+# ── Invitations + accept flow (T-307) ───────────────────────────
 
 
 @router.post(
@@ -97,13 +99,13 @@ def invite_member(
     payload: InvitationCreate,
     user_id: CurrentUserIdDep,
     supabase: DBDep,
+    email_svc: EmailDep,
 ) -> InvitationOut:
-    """Owner invites a teammate by email. Returns the token (mock: logged)."""
+    """Owner invites a teammate by email. Sends an email with the invite link."""
     role = user_role_in_team(supabase, user_id=UUID(user_id), team_id=team_id)
     if role != "owner":
         raise HTTPException(status_code=403, detail="only owners can invite")
 
-    # Check if email already belongs to a team member
     existing_users = supabase.query("users", filters={"email": payload.email})
     existing_user = existing_users[0] if existing_users else None
     if existing_user and user_is_member(
@@ -125,10 +127,130 @@ def invite_member(
             "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
         },
     )
-    return InvitationOut.model_validate({**invitation, "invite_url": f"/invite/{token}"})
+
+    # Send the invite email (mock in dev: logs to console + records)
+    team = supabase.get_by_id("teams", str(team_id))
+    team_name = team["name"] if team else "your team"
+    invite_url = f"/invite/{token}"
+    email_svc.send(
+        to=payload.email,
+        subject=f"You've been invited to {team_name}",
+        body=(
+            f"You've been invited to join {team_name} on Real Estate AI.\n\n"
+            f"Click the link below to accept (expires in 7 days):\n"
+            f"https://app.realestateai.example.com{invite_url}\n"
+        ),
+    )
+
+    return InvitationOut.model_validate({**invitation, "invite_url": invite_url})
 
 
-# ── T-303: Member management (role change + remove + leave) ──
+@router.post(
+    "/invitations/{token}/accept",
+    response_model=InvitationAcceptOut,
+)
+def accept_invitation(
+    token: str,
+    payload: InvitationAcceptIn,
+    supabase: DBDep,
+) -> InvitationAcceptOut:
+    """ST-MT-09: Accept an invite — creates user (if new) + adds to team + returns JWT."""
+    invites = supabase.query("team_invitations", filters={"token": token})
+    if not invites:
+        raise HTTPException(status_code=400, detail="invalid or expired invitation")
+    invitation = invites[0]
+
+    # Already accepted?
+    if invitation.get("accepted_at") is not None:
+        raise HTTPException(status_code=410, detail="invitation already accepted")
+    # Expired?
+    expires_at = datetime.fromisoformat(invitation["expires_at"])
+    if expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="invitation expired")
+
+    team_id = UUID(invitation["team_id"])
+    email = invitation["email"]
+    invite_role = invitation["role"]
+
+    # Find or create the user
+    existing_users = supabase.query("users", filters={"email": email})
+    if existing_users:
+        user = existing_users[0]
+        user_id = UUID(user["id"])
+        if not user.get("password_hash") and payload.password:
+            # LIFF user being onboarded — set their password
+            supabase.update(
+                "users", str(user_id), {"password_hash": hash_password(payload.password)}
+            )
+    else:
+        # New user
+        from app.config import get_settings
+
+        new_pw = payload.password
+        if not new_pw:
+            raise HTTPException(
+                status_code=400,
+                detail="password is required to create a new user",
+            )
+        user = supabase.insert(
+            "users",
+            {
+                "email": email,
+                "full_name": payload.full_name or email.split("@")[0],
+                "password_hash": hash_password(new_pw),
+            },
+        )
+        user_id = UUID(user["id"])
+
+    # Add to team (skip if already a member)
+    existing_memberships = supabase.query(
+        "team_memberships",
+        filters={"team_id": str(team_id), "user_id": str(user_id)},
+    )
+    if not existing_memberships:
+        supabase.insert(
+            "team_memberships",
+            {
+                "team_id": str(team_id),
+                "user_id": str(user_id),
+                "role": invite_role,
+            },
+        )
+    else:
+        # If the membership was soft-deleted (left_at set), un-soft-delete
+        membership = existing_memberships[0]
+        if membership.get("left_at") is not None:
+            supabase.update(
+                "team_memberships",
+                str(membership["id"]),
+                {"left_at": None, "role": invite_role, "removed_by": None},
+            )
+
+    # Mark invitation accepted
+    supabase.update(
+        "team_invitations",
+        str(invitation["id"]),
+        {
+            "accepted_at": datetime.now(timezone.utc).isoformat(),
+            "accepted_by": str(user_id),
+        },
+    )
+
+    # Issue a JWT
+    from app.config import get_settings  # noqa: F401
+
+    settings = get_settings()
+    access_token = create_access_token(str(user_id), email, settings=settings)
+
+    return InvitationAcceptOut(
+        access_token=access_token,
+        token_type="bearer",
+        team_id=team_id,
+        user=User.model_validate({k: v for k, v in user.items() if k != "password_hash"}),
+    )
+
+
+# ── T-303: Member management ──
 
 
 @router.patch(
@@ -149,12 +271,9 @@ def change_member_role(
     new_role = payload.get("role")
     if new_role not in ("owner", "admin", "agent"):
         raise HTTPException(status_code=422, detail="invalid role")
-
-    # Critical: owner cannot demote themselves
     if str(member_user_id) == user_id and new_role != "owner":
         raise HTTPException(status_code=409, detail="owner cannot demote themselves")
 
-    # Update the membership row
     memberships = supabase.query(
         "team_memberships",
         filters={"team_id": str(team_id), "user_id": str(member_user_id)},
@@ -169,7 +288,6 @@ def change_member_role(
     if updated is None:
         raise HTTPException(status_code=404, detail="member not found")
 
-    # Return the updated member shape
     user = supabase.get_by_id("users", str(member_user_id))
     if user is None:
         raise HTTPException(status_code=404, detail="user not found")
@@ -198,13 +316,11 @@ def remove_member(
     user_id: CurrentUserIdDep,
     supabase: DBDep,
 ) -> Response:
-    """ST-MT-07: Owner removes a member (soft-delete via left_at)."""
     actor_role = user_role_in_team(supabase, user_id=UUID(user_id), team_id=team_id)
     if actor_role != "owner":
         raise HTTPException(status_code=403, detail="only owners can remove members")
     if str(member_user_id) == user_id:
         raise HTTPException(status_code=409, detail="owner cannot remove themselves")
-
     memberships = supabase.query(
         "team_memberships",
         filters={"team_id": str(team_id), "user_id": str(member_user_id)},
@@ -222,13 +338,16 @@ def remove_member(
     return Response(status_code=204)
 
 
-@router.post("/{team_id}/leave", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+@router.post(
+    "/{team_id}/leave",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
 def leave_team(
     team_id: UUID,
     user_id: CurrentUserIdDep,
     supabase: DBDep,
 ) -> Response:
-    """ST-MT-08: Self-remove. Owner cannot leave (must delete team or transfer)."""
     actor_role = user_role_in_team(supabase, user_id=UUID(user_id), team_id=team_id)
     if actor_role is None:
         raise HTTPException(status_code=404, detail="not a member of this team")
