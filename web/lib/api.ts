@@ -8,50 +8,91 @@
 
 export class ApiError extends Error {
   public readonly status: number;
-  constructor(status: number, message: string) {
+  public readonly detail?: string;
+  constructor(status: number, message: string, detail?: string) {
     super(message);
     this.status = status;
+    this.detail = detail;
     this.name = "ApiError";
   }
 }
 
-let cachedToken: string | null = null;
-
-export function setAuthToken(token: string | null): void {
-  cachedToken = token;
-  if (typeof window !== "undefined") {
-    if (token) localStorage.setItem("auth_token", token);
-    else localStorage.removeItem("auth_token");
-  }
+export interface User {
+  id: string;
+  email: string | null;
+  full_name: string;
+  phone?: string | null;
+  role?: string | null;
+  line_user_id?: string | null;
 }
+
+export interface AuthResponse {
+  user: User;
+  token: string;
+}
+
+const TOKEN_KEY = "auth_token";
+
+let cachedToken: string | null = null;
 
 function readToken(): string | null {
   if (cachedToken) return cachedToken;
   if (typeof window === "undefined") return null;
-  const stored = window.localStorage.getItem("auth_token");
+  const stored = window.localStorage.getItem(TOKEN_KEY);
   cachedToken = stored;
   return stored;
+}
+
+export function setAuthToken(token: string | null): void {
+  cachedToken = token;
+  if (typeof window !== "undefined") {
+    if (token) localStorage.setItem(TOKEN_KEY, token);
+    else localStorage.removeItem(TOKEN_KEY);
+  }
+}
+
+export function getAuthToken(): string | null {
+  return readToken();
+}
+
+export function clearAuthToken(): void {
+  setAuthToken(null);
 }
 
 async function request<T>(
   path: string,
   init: RequestInit = {},
 ): Promise<T> {
-  const url =
-    (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000") + path;
+  const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
   const headers = new Headers(init.headers);
-  headers.set("Content-Type", "application/json");
+  if (init.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   const token = readToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
-  const res = await fetch(url, { ...init, headers, cache: "no-store" });
+  const res = await fetch(`${baseUrl}${path}`, { ...init, headers, cache: "no-store" });
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new ApiError(res.status, text || res.statusText);
+    let detail: string | undefined;
+    try {
+      const body = (await res.json()) as { detail?: unknown };
+      if (typeof body.detail === "string") detail = body.detail;
+    } catch {
+      /* swallow */
+    }
+    throw new ApiError(res.status, detail || res.statusText, detail);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
 
+export async function apiGet<T>(path: string): Promise<T> {
+  return request<T>(path, { method: "GET" });
+}
+
+export async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  return request<T>(path, { method: "POST", body: JSON.stringify(body) });
+}
+
 export async function checkBackendHealth(): Promise<{ status: string }> {
-  return request<{ status: string }>("/health");
+  return apiGet<{ status: string }>("/health");
 }
