@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { ApiError } from "@/lib/api";
 import { updateListing } from "@/lib/listings";
@@ -13,20 +13,54 @@ interface ListingEditorProps {
   onSaved?: (updated: SavedListing) => void;
 }
 
+interface Snapshot {
+  title: string;
+  description: string;
+  hashtags: string;
+  seoKeywords: string;
+}
+
+function snapshotFromListing(l: SavedListing): Snapshot {
+  return {
+    title: l.title,
+    description: l.description ?? "",
+    hashtags: (l.hashtags ?? []).join(" "),
+    seoKeywords: (l.seo_keywords ?? []).join(", "),
+  };
+}
+
 export function ListingEditor({ initial, onSaved }: ListingEditorProps) {
   const [title, setTitle] = useState(initial.title);
-  const [description, setDescription] = useState(initial.description);
-  const [hashtags, setHashtags] = useState(initial.hashtags.join(" "));
-  const [seoKeywords, setSeoKeywords] = useState(initial.seo_keywords.join(", "));
+  const [description, setDescription] = useState(initial.description ?? "");
+  const [hashtags, setHashtags] = useState((initial.hashtags ?? []).join(" "));
+  const [seoKeywords, setSeoKeywords] = useState(
+    (initial.seo_keywords ?? []).join(", "),
+  );
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Last snapshot we compare "dirty" against. Updated on save so a
+  // second edit round trips correctly. (Previously compared against
+  // `initial` which never changed → button stuck disabled after save.)
+  const [lastSaved, setLastSaved] = useState<Snapshot>(() => snapshotFromListing(initial));
+
+  // If the parent's `initial` changes (e.g. parent re-fetches), reset.
+  useEffect(() => {
+    setTitle(initial.title);
+    setDescription(initial.description ?? "");
+    setHashtags((initial.hashtags ?? []).join(" "));
+    setSeoKeywords((initial.seo_keywords ?? []).join(", "));
+    setSavedAt(null);
+    setLastSaved(snapshotFromListing(initial));
+  }, [initial]);
+
+  const current: Snapshot = { title, description, hashtags, seoKeywords };
   const dirty =
-    title !== initial.title ||
-    description !== initial.description ||
-    hashtags !== initial.hashtags.join(" ") ||
-    seoKeywords !== initial.seo_keywords.join(", ");
+    current.title !== lastSaved.title ||
+    current.description !== lastSaved.description ||
+    current.hashtags !== lastSaved.hashtags ||
+    current.seoKeywords !== lastSaved.seoKeywords;
 
   async function handleSave() {
     setSaving(true);
@@ -44,7 +78,15 @@ export function ListingEditor({ initial, onSaved }: ListingEditorProps) {
           .map((t) => t.trim())
           .filter(Boolean),
       });
-      setSavedAt(new Date().toLocaleTimeString());
+      const now = new Date().toLocaleTimeString();
+      setSavedAt(now);
+      // Bump snapshot so the Save button disables correctly until next edit.
+      setLastSaved({
+        title: title.trim(),
+        description,
+        hashtags,
+        seoKeywords,
+      });
       onSaved?.(updated);
     } catch (err) {
       setError(err instanceof ApiError ? err.detail || err.message : "Save failed");

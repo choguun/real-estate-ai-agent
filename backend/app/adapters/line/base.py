@@ -51,3 +51,12 @@ class LineAdapter(Protocol):
     def verify(self, body: bytes, signature: str) -> bool:
         """Verify a request signature. Returns False on any mismatch."""
         ...
+
+    def send_reply(self, line_user_id: str, text: str) -> dict[str, object]:
+        """Send a reply to a LINE user.
+
+        Mock records the call and returns `{id, line_user_id, sent_at}`;
+        real calls LINE's Reply API and returns the same shape so the
+        router can stay adapter-agnostic.
+        """
+        ...

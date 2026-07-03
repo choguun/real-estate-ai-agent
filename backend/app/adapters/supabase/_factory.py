@@ -36,9 +36,13 @@ def _get_or_init_mock() -> MockSupabaseAdapter:
 def get_db(settings: Settings | None = None) -> SupabaseAdapter:
     """Return a DB adapter based on configuration.
 
-    Pass an explicit `settings` for tests; otherwise reads from env/cache.
+    `use_mocks=True` is the master switch and overrides every
+    `use_real_*` flag — useful in CI / docs / laptop dev where you
+    never want a real adapter even if the URL is filled in.
     """
     settings = settings or get_settings()
+    if settings.use_mocks:
+        return _get_or_init_mock()
     if settings.use_real_supabase:
         return RealSupabaseAdapter(
             base_url=settings.supabase_url,
