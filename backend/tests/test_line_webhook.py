@@ -395,3 +395,39 @@ def test_replay_of_same_signed_payload_returns_200_twice(
 
     assert r1.status_code == 200
     assert r2.status_code == 200
+
+
+# ─── Body cap (hermes-agent#23197 takeaway) ─────────────────────────
+def test_oversized_body_rejected_with_413(client: TestClient, mock_line: LineMockAdapter) -> None:
+    """Body cap (1 MiB) defended before any signature work. 413 on oversize."""
+    from app.adapters.line.base import WEBHOOK_BODY_MAX_BYTES
+
+    big = b'{"events":[]}' + b"x" * (WEBHOOK_BODY_MAX_BYTES + 1)
+    sig = mock_line.sign(big)
+    res = client.post(
+        "/webhook/line",
+        content=big,
+        headers={SIGNATURE_HEADER: sig, "Content-Type": "application/json"},
+    )
+    assert res.status_code == 413
+    assert "too large" in res.json()["detail"]
+
+
+def test_body_at_exact_cap_passes_through(
+    client: TestClient, mock_line: LineMockAdapter
+) -> None:
+    """Boundary case — a body of exactly 1 MiB is the largest accepted."""
+    from app.adapters.line.base import WEBHOOK_BODY_MAX_BYTES
+
+    # 'x' * cap = body that is exactly the cap. (We use a raw byte string
+    # because we're only testing the size gate, not the JSON parser.)
+    body = b"x" * WEBHOOK_BODY_MAX_BYTES
+    sig = mock_line.sign(body)
+    res = client.post(
+        "/webhook/line",
+        content=body,
+        headers={SIGNATURE_HEADER: sig, "Content-Type": "application/json"},
+    )
+    # JSON parse will fail (size gate passes, but body isn't JSON) —
+    # the route must return 400, NOT 413, to prove the cap is `<=`.
+    assert res.status_code == 400

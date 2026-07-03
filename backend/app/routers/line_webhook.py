@@ -8,7 +8,11 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, status
 
-from app.adapters.line.base import SIGNATURE_HEADER, verify_line_webhook
+from app.adapters.line.base import (
+    SIGNATURE_HEADER,
+    WEBHOOK_BODY_MAX_BYTES,
+    verify_line_webhook,
+)
 from app.deps import DBDep, SettingsDep
 from app.services.lead_pipeline import LeadPipeline
 
@@ -25,6 +29,15 @@ async def line_webhook(
 ) -> dict[str, Any]:
     # 1. Read raw body bytes BEFORE any JSON parsing.
     body = await request.body()
+
+    # Memory-exhaustion guard: aiohttp's client_max_size doesn't apply
+    # in all body modes; we cap explicitly. Reject before doing any
+    # HMAC work on a body we'd never accept.
+    if len(body) > WEBHOOK_BODY_MAX_BYTES:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="payload too large",
+        )
 
     # 2. Read & verify the signature.
     signature = request.headers.get(SIGNATURE_HEADER)
