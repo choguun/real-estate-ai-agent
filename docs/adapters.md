@@ -9,9 +9,15 @@ Protocol; switching mocks → real services is a single env flag flip.
 adapters/<name>/
   ├── base.py        Protocol + DTOs + (optional) shared helpers
   ├── mock.py        in-process implementation, used by default in dev/tests
-  ├── _real.py       httpx client against the real service (stub for MVP)
+  ├── <real>.py      httpx client against the real service (stub for MVP)
   ├── _factory.py    build_<adapter>(settings) -> Adapter
   └── __init__.py    public re-exports
+
+Note: the naming convention isn't strictly uniform. Supabase & LINE put the
+real impl in `real.py`; AI splits per-provider
+(`anthropic_real.py`, `gemini_real.py`); Storage calls it
+`supabase_real.py`. The factories are uniform — they import the right file
+regardless of name.
 ```
 
 The factory reads `Settings` and returns the appropriate class. No router ever
@@ -31,7 +37,9 @@ references a concrete class by name — only the Protocol.
 `.env` (see `backend/.env.example`):
 
 ```bash
-USE_MOCKS=true                  # when true, every USE_REAL_* is bypassed
+USE_MOCKS=true                  # master switch — when true, mocks win even
+                               # if individual USE_REAL_* flags are set.
+                               # Set to false only when rolling out real services.
 
 USE_REAL_SUPABASE=false        # real Supabase DB + Storage
 USE_REAL_LINE=false             # real LINE Messaging API
@@ -45,7 +53,7 @@ GEMINI_API_KEY=AIza...
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
 
-# Required for T-009's webhook (real LINE is multi-tenant):
+# Required for the LINE webhook (real LINE is multi-tenant):
 LINE_DEFAULT_AGENT_ID=<uuid-of-the-agent>
 ```
 
@@ -72,9 +80,9 @@ RUN_REAL_ADAPTER_TESTS=1 pytest -m real_adapter
 ```
 
 What it does:
-- Instantiates each `_real.py` class with placeholder config.
+- Instantiates each `*_real` class with placeholder config.
 - `assert isinstance(real, Protocol)` — proves the wire is complete.
-- Calls sign/verify helpers and asserts round-trip.
+- Calls `sign_line_webhook` / `verify_line_webhook` and asserts round-trip.
 
 ## Per-adapter behaviour matrix
 
