@@ -4,19 +4,15 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 
 import { ApiError } from "@/lib/api";
-import { generateListing, saveListing } from "@/lib/listings";
 import { createProperty } from "@/lib/properties";
 import type {
-  GeneratedContent,
   Property,
-  PropertySummaryForAi,
   PropertyType,
   PropertyCreateInput,
 } from "@/lib/types";
 import { PROPERTY_TYPE_LABELS_TH } from "@/lib/types";
 import { uploadImages } from "@/lib/uploads";
 import { ImageUploader } from "./ImageUploader";
-import { ListingPreview } from "./ListingPreview";
 
 const PROPERTY_TYPE_OPTIONS: PropertyType[] = [
   "condo",
@@ -48,42 +44,6 @@ export function PropertyForm() {
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const [generating, setGenerating] = useState(false);
-  const [generated, setGenerated] = useState<GeneratedContent[] | null>(null);
-  const [generateError, setGenerateError] = useState<string | null>(null);
-
-  function buildSummary(): PropertySummaryForAi {
-    return {
-      title: title.trim() || null,
-      property_type: propertyType || null,
-      price: numOrNull(price),
-      size_sqm: numOrNull(sizeSqm),
-      bedrooms: numOrNull(bedrooms),
-      bathrooms: numOrNull(bathrooms),
-      floor: numOrNull(floor),
-      address: address.trim() || null,
-      district: district.trim() || null,
-      province: province.trim() || null,
-      near_bts_mrt: nearBtsMrt.trim() || null,
-      foreign_quota: foreignQuota,
-    };
-  }
-
-  async function handleGenerate() {
-    setGenerateError(null);
-    setGenerating(true);
-    try {
-      const result = await generateListing(buildSummary());
-      setGenerated(result);
-    } catch (err) {
-      setGenerateError(
-        err instanceof ApiError ? err.detail || err.message : "Generation failed",
-      );
-    } finally {
-      setGenerating(false);
-    }
-  }
-
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
@@ -104,36 +64,24 @@ export function PropertyForm() {
 
     setSubmitting(true);
     const payload: PropertyCreateInput = {
-      ...buildSummary(),
+      title: title.trim() || null,
       description: description.trim() || null,
+      property_type: propertyType || null,
+      price: numOrNull(price),
+      size_sqm: numOrNull(sizeSqm),
+      bedrooms: numOrNull(bedrooms),
+      bathrooms: numOrNull(bathrooms),
+      floor: numOrNull(floor),
+      address: address.trim() || null,
+      district: district.trim() || null,
+      province: province.trim() || null,
+      near_bts_mrt: nearBtsMrt.trim() || null,
+      foreign_quota: foreignQuota,
       images: imageUrls.length > 0 ? imageUrls : null,
     };
 
     try {
       const created: Property = await createProperty(payload);
-
-      // Auto-save any generated listings the user previewed.
-      if (generated && generated.length > 0) {
-        try {
-          for (const l of generated) {
-            await saveListing({
-              property_id: created.id,
-              platform: l.platform,
-              title: l.title,
-              description: l.description,
-              hashtags: l.hashtags,
-              seo_keywords: l.seo_keywords,
-              ai_model: l.ai_model,
-              prompt_used: l.prompt_used ?? null,
-            });
-          }
-        } catch (err) {
-          // Property was created but some listings failed — surface but don't
-          // block navigation; the user can regenerate from the detail page.
-          console.error("Failed to save generated listings", err);
-        }
-      }
-
       router.push(`/properties/${created.id}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.detail || err.message : "Save failed");
@@ -146,43 +94,6 @@ export function PropertyForm() {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6" data-testid="property-form">
-      {/* ─── Generate listing panel (always visible) ─────────────── */}
-      <section className="rounded-lg border bg-card p-5">
-        <header className="flex items-center justify-between gap-3">
-          <div>
-            <h2 className="font-medium">AI listing generator</h2>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Use whatever you&apos;ve filled in below to draft copy for DDProperty,
-              Livinginsider, Facebook, and General.
-            </p>
-          </div>
-          <button
-            type="button"
-            disabled={generating}
-            onClick={handleGenerate}
-            data-testid="generate-listing"
-            className="shrink-0 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow hover:opacity-90 disabled:opacity-50"
-          >
-            {generating ? "Generating…" : "✨ Generate"}
-          </button>
-        </header>
-
-        {generateError && (
-          <p
-            role="alert"
-            className="mt-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive"
-          >
-            {generateError}
-          </p>
-        )}
-
-        {generated && generated.length > 0 && (
-          <div className="mt-5">
-            <ListingPreview contents={generated} />
-          </div>
-        )}
-      </section>
-
       {/* ─── Photos ────────────────────────────────────────────── */}
       <section className="rounded-lg border bg-card p-5">
         <h2 className="font-medium">Photos</h2>

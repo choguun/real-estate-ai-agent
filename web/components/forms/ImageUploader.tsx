@@ -20,14 +20,13 @@ export function ImageUploader({ onFilesChange, existingUrls = [], disabled }: Im
   const [previews, setPreviews] = useState<Preview[]>([]);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  // Revoke every object URL whenever the preview list changes OR on
-  // unmount. Before this fix, only the unmount path revoked URLs, which
-  // leaked every prior batch's blob refs when the user picked again.
+  // Tear down object URLs when the component unmounts or previews change.
   useEffect(() => {
     return () => {
       previews.forEach((p) => URL.revokeObjectURL(p.url));
     };
-  }, [previews]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function handleSelected(files: FileList | null) {
     if (!files || files.length === 0) return;
@@ -40,13 +39,11 @@ export function ImageUploader({ onFilesChange, existingUrls = [], disabled }: Im
   }
 
   function removeAt(index: number) {
-    setPreviews((prev) => {
-      const next = prev.slice();
-      const [removed] = next.splice(index, 1);
-      if (removed) URL.revokeObjectURL(removed.url);
-      onFilesChange(next.map((p) => p.file));
-      return next;
-    });
+    const next = previews.slice();
+    const [removed] = next.splice(index, 1);
+    if (removed) URL.revokeObjectURL(removed.url);
+    setPreviews(next);
+    onFilesChange(next.map((p) => p.file));
   }
 
   return (

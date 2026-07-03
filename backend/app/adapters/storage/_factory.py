@@ -11,16 +11,9 @@ from app.config import Settings, get_settings
 def get_storage(settings: Settings | None = None) -> StorageAdapter:
     """Pick the storage adapter by configuration.
 
-    `use_mocks=True` is the master switch. When true, LocalStorageAdapter
-    is returned regardless of `use_real_supabase`. `public_base_url` is
-    used to build URLs returned to the client.
+    `public_base_url` is used to build URLs returned to the client.
     """
     settings = settings or get_settings()
-    if settings.use_mocks:
-        return LocalStorageAdapter(
-            var_dir=settings.var_dir,
-            public_base_url=settings.public_base_url,
-        )
     if settings.use_real_supabase:
         return SupabaseStorageAdapter(
             base_url=settings.supabase_url,
