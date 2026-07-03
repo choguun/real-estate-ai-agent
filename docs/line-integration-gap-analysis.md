@@ -18,7 +18,7 @@ The value of looking is to find the **real gaps** in our `backend/app/adapters/l
 | 2 | Self-message filter (ignore our own outbound echoes) | XS | **Fix now** |
 | 3 | Reply-token cache + Push fallback on outbound | S | **Fix now** |
 | 4 | Markdown stripping + 5-message / 4500-char chunking on outbound text | S | **Fix now** |
-| 5 | `unsend` event handling (mark inbound message as withdrawn) | XS | **Fix in this PR** |
+| 5 | `unsend` event handling (mark inbound message as withdrawn) | XS | **Defer** (1-migration scope; not in this PR) |
 | 6 | Image / audio / video / file / sticker / location inbound parsing | M | Defer (not in MVP scope) |
 | 7 | Image / audio / video SEND with media-token HTTPS serving + `LINE_PUBLIC_URL` | M-L | Defer until media send is needed |
 | 8 | Three-allowlist (`LINE_ALLOWED_USERS` / `_GROUPS` / `_ROOMS`) gating | XS | Defer (single-tenant MVP) |
@@ -248,4 +248,4 @@ I'd tag the rest of the table above (allowlists, media inbound, media send, load
 
 ## TL;DR for the PR description
 
-> Reviewed [hermes-agent#23197](https://github.com/NousResearch/hermes-agent/pull/23197) to mine for patterns relevant to our mocks-first Thai real-estate LINE integration. We're going to fold 4 small security/correctness items into the next backend PR (body-size cap, markdown strip + LINE chunking helpers in `line/base.py`, self-message filter stub on the real adapter, and a graceful `unsend` handler in `lead_pipeline`). Reply-token cache + Push fallback is the one substantive real adapter work; we'll add it when we wire the real client because the mock already covers the semantics. Everything else (allowlists, media, slow-LLM button, account-link, things) is N/A or future-work — flagged as AIDLC tickets.
+> Reviewed [hermes-agent#23197](https://github.com/NousResearch/hermes-agent/pull/23197) to mine for patterns relevant to our mocks-first Thai real-estate LINE integration. We're folding 4 items into the next backend PR: (1) body-size cap, (2) outbound Markdown strip + LINE chunking helpers, (3) self-message filter + reply-token cache on the real adapter, (4) ``LineDep`` wiring so the dispatcher can cache reply tokens off inbound events. Reply-token cache + Push fallback is the one substantive real adapter work; we'll add the actual HTTP dispatch when we wire the real client. Everything else (allowlists, media, slow-LLM button, account-link, things, ``unsend``) is N/A or future-work — flagged as AIDLC tickets.

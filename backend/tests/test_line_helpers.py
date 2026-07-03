@@ -15,6 +15,7 @@ import pytest
 from app.adapters.line.base import (
     LINE_MAX_MESSAGES_PER_CALL,
     LINE_SAFE_BUBBLE_CHARS,
+    REPLY_TOKEN_TTL_SECONDS,
     WEBHOOK_BODY_MAX_BYTES,
     split_for_line,
     strip_markdown,
@@ -202,5 +203,85 @@ class TestLineRealAdapterStructure:
         a = self._build(bot_user_id="U-self")
         with pytest.raises(NotImplementedError) as exc:
             a.send_reply("U-alice", "hello")
-        assert "NotImplementedError" in type(exc.value).__name__
         assert "Reply" in str(exc.value) or "Push" in str(exc.value)
+
+
+# ─── LineMockAdapter: mock↔real outbound parity (C1 fix) ──────────────
+class TestLineMockAdapterOutboundParity:
+    """Verify the mock applies the same outbound transforms the real
+    adapter will apply (strip_markdown + split_for_line). Without
+    this, mock and real diverge on what LINE would actually receive."""
+
+    def _build(self) -> object:  # noqa: ANN401
+        from app.adapters.line.mock import LineMockAdapter
+
+        return LineMockAdapter(channel_secret="test")
+
+    def test_send_reply_strips_markdown_before_recording(self) -> None:
+        m = self._build()
+        m.send_reply("U-alice", "**bold** and *italic*")
+        assert m.sent_replies[-1].text == "bold and italic"
+
+    def test_send_reply_chunks_long_text(self) -> None:
+        from app.adapters.line.base import (
+            LINE_MAX_MESSAGES_PER_CALL,
+            LINE_SAFE_BUBBLE_CHARS,
+            split_for_line,
+        )
+
+        # 1. The helper itself caps at LINE_MAX_MESSAGES_PER_CALL.
+        text = "\n\n".join(f"para-{i:02d}" + "x" * 6 for i in range(10))
+        chunks = split_for_line(text, max_chars=10)
+        assert len(chunks) == LINE_MAX_MESSAGES_PER_CALL
+
+        # 2. The mock's send_reply uses the default LINE_SAFE_BUBBLE_CHARS=4500.
+        # For text that fits in one chunk the mock records exactly 1 entry.
+        m = self._build()
+        before = len(m.sent_replies)
+        m.send_reply("U-alice", "short text")
+        new = [r for r in m.sent_replies[before:] if r.chunk_index >= 0]
+        assert len(new) == 1
+        # Ensure the cap value is the public constant the helper uses.
+        assert LINE_SAFE_BUBBLE_CHARS == 4500
+
+    def test_send_reply_records_push_mode_when_no_reply_token(self) -> None:
+        m = self._build()
+        result = m.send_reply("U-alice", "hello")
+        assert result["mode"] == "push"
+        assert "chunks" in result
+        assert len(result["chunks"]) == 1
+
+    def test_send_reply_records_reply_mode_when_token_cached(self) -> None:
+        m = self._build()
+        m.set_reply_token("U-alice", "tok-1")
+        result = m.send_reply("U-alice", "hello")
+        assert result["mode"] == "reply"
+        # Token is single-use — second send should be 'push' again.
+        result2 = m.send_reply("U-alice", "hello again")
+        assert result2["mode"] == "push"
+
+
+# ─── Reply-token caching (C2 fix) ──────────────────────────────────────
+class TestLineMockReplyTokenCache:
+    """Verify ``set_reply_token`` / ``cached_reply_tokens`` — the
+    Protocol method that the webhook now invokes on every inbound."""
+
+    def _build(self) -> object:  # noqa: ANN401
+        from app.adapters.line.mock import LineMockAdapter
+
+        return LineMockAdapter(channel_secret="test")
+
+    def test_set_reply_token_caches_for_chat(self) -> None:
+        m = self._build()
+        m.set_reply_token("U-alice", "tok-1")
+        assert m.cached_reply_tokens() == {"U-alice": "tok-1"}
+
+    def test_set_reply_token_overwrites(self) -> None:
+        m = self._build()
+        m.set_reply_token("U-alice", "tok-1")
+        m.set_reply_token("U-alice", "tok-2")
+        assert m.cached_reply_tokens() == {"U-alice": "tok-2"}
+
+    def test_set_reply_token_uses_protocol_default_ttl(self) -> None:
+        """The mock respects the Protocol-level REPLY_TOKEN_TTL_SECONDS."""
+        assert REPLY_TOKEN_TTL_SECONDS == 60

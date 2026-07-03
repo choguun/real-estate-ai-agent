@@ -4,10 +4,13 @@ Wires to the LINE Messaging API when the user provides credentials.
 For Month-1 MVP, every method that would actually hit the network
 raises ``NotImplementedError`` so the test suite stays offline.
 
-The structural pieces (bot user-id cache, reply-token cache, Markdown
-strip + LINE chunking, self-message filter) live here as the bones
-that the eventual ``httpx`` wiring will need. They are exercised by
-``tests/test_real_swap.py`` and ``tests/test_line_helpers.py``.
+The structural pieces (bot user-id cache, reply-token cache,
+self-message filter) live here as the bones that the eventual
+``httpx`` wiring will need. They are exercised by
+``tests/test_line_helpers.py::TestLineRealAdapterStructure``; the mock
+maintains the same surface so routers can call these methods
+blindly. Outbound transforms (``strip_markdown``, ``split_for_line``)
+live in ``base.py`` — both adapters import them.
 """
 
 from __future__ import annotations

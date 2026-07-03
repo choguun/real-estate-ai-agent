@@ -25,6 +25,10 @@ WEBHOOK_BODY_MAX_BYTES = 1 * 1024 * 1024  # 1 MiB — memory-exhaustion guard
 LINE_MAX_MESSAGES_PER_CALL = 5
 LINE_SAFE_BUBBLE_CHARS = 4500  # leave margin under the 5000 hard cap
 
+# Reply-token lifetime per LINE docs — about 60s. Shared between mock
+# and real so the cache TTL is consistent.
+REPLY_TOKEN_TTL_SECONDS = 60
+
 
 def sign_line_webhook(body: bytes, channel_secret: str) -> str:
     """base64(HMAC-SHA256(secret, body)) — what LINE itself produces."""
@@ -122,7 +126,7 @@ def _split_long(text: str, max_chars: int) -> list[str]:
     rest = text
     while len(rest) > max_chars and len(out) < LINE_MAX_MESSAGES_PER_CALL:
         window = rest[:max_chars]
-        # Prefer sentence terminators (Western ``. `` + Thai ``。`` + exclamations).
+        # Prefer sentence terminators (Western ``. `` + Thai ``。``).
         boundary = max(window.rfind(". "), window.rfind("。"))
         if boundary == -1 or boundary < max_chars // 2:
             # No good sentence boundary — hard cut.
@@ -136,10 +140,26 @@ def _split_long(text: str, max_chars: int) -> list[str]:
 
 @runtime_checkable
 class LineAdapter(Protocol):
-    """LINE messaging adapter — mock + real (stub for MVP)."""
+    """LINE messaging adapter — mock + real.
+
+    Concrete implementations live in ``mock.py`` and ``real.py``. Every
+    router depends on this Protocol only — never on a concrete class.
+    """
 
     @property
     def channel_secret(self) -> str: ...
+
+    @property
+    def bot_user_id(self) -> str | None:
+        """Own channel's LINE userId.
+
+        Used to filter self-echoes: when the bot userId is known,
+        ``send_reply(line_user_id, text)`` short-circuits if
+        ``line_user_id == bot_user_id`` (prevents infinite loops). The
+        mock returns None (no echo filter); the real adapter populates
+        this from ``GET /v2/bot/info`` when wiring lands.
+        """
+        ...
 
     def sign(self, body: bytes) -> str:
         """Sign `body` with the channel secret. Used by tests/dev tooling."""
@@ -149,11 +169,32 @@ class LineAdapter(Protocol):
         """Verify a request signature. Returns False on any mismatch."""
         ...
 
+    def set_reply_token(
+        self, chat_id: str, token: str, *, ttl_seconds: int = REPLY_TOKEN_TTL_SECONDS
+    ) -> None:
+        """Cache a Reply token off an inbound ``message`` event.
+
+        The Reply API is free; Push is metered. Inbound webhook
+        dispatchers call this when an event has a ``replyToken`` so
+        ``send_reply`` can later try the Reply path first and fall
+        back to Push if missing/expired.
+
+        ``chat_id`` is the LINE chat identifier (userId for DMs,
+        groupId/roomId for groups/rooms). For our MVP single-tenant
+        setup it's always the userId.
+        """
+        ...
+
     def send_reply(self, line_user_id: str, text: str) -> dict[str, object]:
         """Send a reply to a LINE user.
 
-        Mock records the call and returns `{id, line_user_id, sent_at}`;
-        real calls LINE's Reply API and returns the same shape so the
-        router can stay adapter-agnostic.
+        Mock records the call (after applying ``strip_markdown`` /
+        ``split_for_line`` for parity with the real adapter's outgoing
+        shape). Real calls LINE's Reply API (preferring the cached
+        ``replyToken``) and falls back to Push.
+
+        Self-message filter: when ``bot_user_id`` is set and
+        ``line_user_id == bot_user_id``, returns
+        ``{"skipped": "self-message", ...}`` instead of sending.
         """
         ...

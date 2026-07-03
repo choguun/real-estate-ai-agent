@@ -1,4 +1,9 @@
-"""LINE webhook — HMAC verify, then run events through the lead pipeline."""
+"""LINE webhook — HMAC verify, then run events through the lead pipeline.
+
+Wires ``LineDep`` so the dispatcher can cache reply tokens off inbound
+``message`` events for outbound use. The reply-token cache is a
+Protocol method on the adapter (no-op in mock, real cache when wired).
+"""
 
 from __future__ import annotations
 
@@ -13,7 +18,7 @@ from app.adapters.line.base import (
     WEBHOOK_BODY_MAX_BYTES,
     verify_line_webhook,
 )
-from app.deps import DBDep, SettingsDep
+from app.deps import DBDep, LineDep, SettingsDep
 from app.services.lead_pipeline import LeadPipeline
 
 logger = logging.getLogger(__name__)
@@ -26,13 +31,17 @@ async def line_webhook(
     request: Request,
     settings: SettingsDep,
     db: DBDep,
+    line: LineDep,
 ) -> dict[str, Any]:
     # 1. Read raw body bytes BEFORE any JSON parsing.
     body = await request.body()
 
-    # Memory-exhaustion guard: aiohttp's client_max_size doesn't apply
-    # in all body modes; we cap explicitly. Reject before doing any
-    # HMAC work on a body we'd never accept.
+    # Memory-exhaustion guard: Starlette's ``Request.body()`` reads the
+    # entire body into memory with no built-in size cap; we cap
+    # explicitly. Reject before doing any HMAC work on a body we'd
+    # never accept. (uvicorn's ``h11_max_incomplete_event_size`` only
+    # caps incomplete event headers, not bodies — proxy this with
+    # ``client_max_body_size`` if you put nginx in front.)
     if len(body) > WEBHOOK_BODY_MAX_BYTES:
         raise HTTPException(
             status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -78,6 +87,13 @@ async def line_webhook(
         pipeline = LeadPipeline(db)
         for event in events:
             try:
+                # Cache the reply token off any inbound message event so
+                # the eventual outbound Reply API can use it (free vs the
+                # metered Push API). Both mock and real adapters expose
+                # ``set_reply_token`` on the Protocol.
+                if event.get("type") == "message":
+                    _cache_reply_token(line, event)
+
                 results.append(_as_dict(pipeline.process_event(event, agent_id=agent_id)))
             except Exception:
                 logger.exception("LINE pipeline crashed on event; skipping")
@@ -89,6 +105,24 @@ async def line_webhook(
         "processed": processed_count,
         "results": results,
     }
+
+
+def _cache_reply_token(line: Any, event: dict[str, Any]) -> None:
+    """Best-effort cache of the inbound ``replyToken`` for later use.
+
+    Skips silently if the event has no ``replyToken`` (some webhook
+    events — e.g. follow/unfollow — don't carry one). Also skips if
+    the source is missing a chat identifier (shouldn't happen on
+    well-formed events but is defensive).
+    """
+    reply_token = event.get("replyToken")
+    if not reply_token or not isinstance(reply_token, str):
+        return
+    source = event.get("source") or {}
+    chat_id = source.get("userId") or source.get("groupId") or source.get("roomId")
+    if not chat_id:
+        return
+    line.set_reply_token(chat_id, reply_token)
 
 
 def _as_dict(result: Any) -> dict[str, Any]:
