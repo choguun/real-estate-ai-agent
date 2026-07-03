@@ -25,7 +25,10 @@ select = [
     "PTH", # use-pathlib
     "ERA", # eradicate commented-out code
 ]
-ignore = ["S101"]  # asserts in tests are fine
+ignore = [
+    "S101",  # asserts in tests are fine
+    "UP017", # datetime.UTC — not in installed typeshed; mypy can't see it
+]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101", "S105", "S106", "E402", "B011"]
@@ -52,3 +55,6 @@ addopts = "-ra -q --strict-markers"
 pythonpath = ["."]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "real_adapter: tests that hit real third-party services (skipped unless RUN_REAL_ADAPTER_TESTS=1)",
+]
