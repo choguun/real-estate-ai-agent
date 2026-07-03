@@ -33,7 +33,6 @@ class Settings(BaseSettings):
 
     line_channel_secret: str = "dev-line-channel-secret-change-me"
     line_channel_access_token: str = "dev-line-channel-access-token-change-me"
-    line_default_agent_id: str | None = None
 
     anthropic_api_key: str = "dev-anthropic-key-change-me"
     anthropic_model: str = "claude-3-5-sonnet-latest"
@@ -46,7 +45,6 @@ class Settings(BaseSettings):
 
     # ── Mock storage ────────────────────────────────────────────────────
     var_dir: str = "var"
-    public_base_url: str = "http://localhost:8000"
 
     model_config = SettingsConfigDict(
         env_file=".env",
