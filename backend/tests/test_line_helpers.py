@@ -10,8 +10,6 @@ Covers the structural work landed alongside hermes-agent#23197:
 
 from __future__ import annotations
 
-import pytest
-
 from app.adapters.line.base import (
     LINE_MAX_MESSAGES_PER_CALL,
     LINE_SAFE_BUBBLE_CHARS,
@@ -197,13 +195,25 @@ class TestLineRealAdapterStructure:
         assert result["skipped"] == "self-message"
         assert result["id"].startswith("reply-")
 
-    def test_send_reply_to_other_user_raises_not_implemented(self) -> None:
-        """Outbound to anyone but self still raises — the real wiring
-        replaces the raise with the Reply/Push dispatch."""
-        a = self._build(bot_user_id="U-self")
-        with pytest.raises(NotImplementedError) as exc:
-            a.send_reply("U-alice", "hello")
-        assert "Reply" in str(exc.value) or "Push" in str(exc.value)
+    def test_send_reply_to_other_user_dispatches_via_push(self) -> None:
+        """T-102: real adapter's send_reply now hits the Reply/Push API
+        (httpx.MockTransport) — no longer raises NotImplementedError for
+        non-self messages."""
+        import httpx
+
+        from app.adapters.line.real import LineRealAdapter
+
+        a = LineRealAdapter(
+            channel_secret="s",
+            channel_access_token="t",
+            bot_user_id="U-self",
+            api_base="https://api.line.me",
+            transport=httpx.MockTransport(lambda req: httpx.Response(200, json={"message": "ok"})),
+        )
+        result = a.send_reply("U-alice", "hello")
+        assert result["via"] == "push"
+        assert result["line_user_id"] == "U-alice"
+        assert "bubbles" in result
 
 
 # ─── LineMockAdapter: mock↔real outbound parity (C1 fix) ──────────────
