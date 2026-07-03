@@ -33,22 +33,27 @@ export interface AuthResponse {
 
 const TOKEN_KEY = "auth_token";
 
-let cachedToken: string | null = null;
-
+/**
+ * Read the JWT afresh from localStorage every call.
+ *
+ * Rationale: a module-level cache (`cachedToken`) sounded like an
+ * obvious optimization but caused two real bugs —
+ *   (a) StrictMode double-render in dev can drop a value mid-flight;
+ *   (b) `clearAuthToken()` mutates a singleton shared by every
+ *       component, so one clear can race another component's read.
+ *
+ * `localStorage.getItem` is ~10 µs and runs on every API call anyway;
+ * the cache wasn't buying anything.
+ */
 function readToken(): string | null {
-  if (cachedToken) return cachedToken;
   if (typeof window === "undefined") return null;
-  const stored = window.localStorage.getItem(TOKEN_KEY);
-  cachedToken = stored;
-  return stored;
+  return window.localStorage.getItem(TOKEN_KEY);
 }
 
 export function setAuthToken(token: string | null): void {
-  cachedToken = token;
-  if (typeof window !== "undefined") {
-    if (token) localStorage.setItem(TOKEN_KEY, token);
-    else localStorage.removeItem(TOKEN_KEY);
-  }
+  if (typeof window === "undefined") return;
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
 }
 
 export function getAuthToken(): string | null {
@@ -84,23 +89,36 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await res.json()) as T;
 }
 
-export async function apiGet<T>(path: string): Promise<T> {
-  return request<T>(path, { method: "GET" });
+export async function apiGet<T>(
+  path: string,
+  options?: { signal?: AbortSignal },
+): Promise<T> {
+  return request<T>(path, { method: "GET", signal: options?.signal });
 }
 
-export async function apiPost<T>(path: string, body: unknown): Promise<T> {
+export async function apiPost<T>(
+  path: string,
+  body: unknown,
+  options?: { signal?: AbortSignal },
+): Promise<T> {
   return request<T>(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal: options?.signal,
   });
 }
 
-export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
+export async function apiPatch<T>(
+  path: string,
+  body: unknown,
+  options?: { signal?: AbortSignal },
+): Promise<T> {
   return request<T>(path, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal: options?.signal,
   });
 }
 

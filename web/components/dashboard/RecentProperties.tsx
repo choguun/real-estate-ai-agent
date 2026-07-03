@@ -25,7 +25,7 @@ export function RecentProperties({ properties }: RecentPropertiesProps) {
   }
 
   return (
-    <ul className="grid gap-3 sm:grid-cols-2">
+    <ul data-testid="recent-properties" className="grid gap-3 sm:grid-cols-2">
       {properties.map((p) => (
         <li key={p.id}>
           <PropertyCard property={p} />

@@ -26,20 +26,30 @@ export default function DashboardPage() {
       return;
     }
     let cancelled = false;
+    // AbortController per poll cycle — guards against overlapping
+    // fetches when the backend is slower than POLL_INTERVAL_MS.
+    let inflight: AbortController | null = null;
 
     async function load() {
+      inflight?.abort();
+      const ctl = new AbortController();
+      inflight = ctl;
       try {
-        const [me, d] = await Promise.all([fetchMe(), getDashboard()]);
-        if (cancelled) return;
+        const [me, d] = await Promise.all([
+          fetchMe({ signal: ctl.signal }),
+          getDashboard({ signal: ctl.signal }),
+        ]);
+        if (cancelled || ctl.signal.aborted) return;
         setUser(me);
         setData(d);
         setError(null);
       } catch (err) {
-        if (cancelled) return;
+        if (cancelled || ctl.signal.aborted) return;
         if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
           router.replace("/login");
           return;
         }
+        if (err instanceof DOMException && err.name === "AbortError") return;
         setError(
           err instanceof ApiError
             ? err.detail || err.message
@@ -52,6 +62,7 @@ export default function DashboardPage() {
     const interval = setInterval(load, POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
+      inflight?.abort();
       clearInterval(interval);
     };
   }, [router]);

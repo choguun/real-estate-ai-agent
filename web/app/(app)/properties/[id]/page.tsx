@@ -8,6 +8,7 @@ import { ApiError, getAuthToken } from "@/lib/api";
 import {
   generateListing,
   listListingsForProperty,
+  saveListing,
 } from "@/lib/listings";
 import { getProperty } from "@/lib/properties";
 import type {
@@ -73,7 +74,6 @@ export default function PropertyDetailPage() {
       };
       // Save each generated variant
       const generated: GeneratedContent[] = await generateListing(summary);
-      const { saveListing } = await import("@/lib/listings");
       for (const g of generated) {
         await saveListing({
           property_id: property.id,
@@ -190,13 +190,13 @@ export default function PropertyDetailPage() {
           <button
             type="button"
             onClick={handleGenerateFromDetail}
-            disabled={generating || listings.length > 0}
+            disabled={generating}
             className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow hover:opacity-90 disabled:opacity-50"
           >
             {generating
               ? "Generating…"
               : listings.length > 0
-                ? "All platforms saved"
+                ? "🔄 Regenerate"
                 : "✨ Generate"}
           </button>
         </header>
