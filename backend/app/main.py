@@ -1,0 +1,62 @@
+"""FastAPI application factory.
+
+Single source of truth for app construction. Mock-first: every adapter is
+selected at startup by `get_settings()` flags. To swap mock → real
+services, change env vars — no code edits required.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.config import Settings, get_settings
+from app.routers.health import router as health_router
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    settings = get_settings()
+    logger.info(
+        "Starting %s v%s [%s] mocks=%s",
+        settings.app_name,
+        settings.app_version,
+        settings.env,
+        settings.use_mocks,
+    )
+    yield
+    logger.info("Shutting down")
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    """Build the FastAPI app. Tests pass a custom Settings for isolation."""
+    settings = settings or get_settings()
+    app = FastAPI(
+        title=settings.app_name,
+        version=settings.app_version,
+        lifespan=lifespan,
+    )
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    @app.get("/", tags=["meta"])
+    def root() -> dict[str, str]:
+        return {"service": settings.app_name, "version": settings.app_version}
+
+    app.include_router(health_router)
+    return app
+
+
+app = create_app()

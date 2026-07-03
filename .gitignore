@@ -12,6 +12,7 @@ backend/.mypy_cache/
 backend/htmlcov/
 backend/.coverage
 backend/coverage.xml
+backend/var/
 
 # ─── Node / Next.js ────────────────────────────────────
 node_modules/
