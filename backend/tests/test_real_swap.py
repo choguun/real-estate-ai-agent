@@ -35,12 +35,12 @@ from app.adapters.supabase import (
     SupabaseAdapter,
 )
 
+
 pytestmark = pytest.mark.real_adapter
 
 
 def _skip_unless_enabled():
     import os
-
     if os.environ.get("RUN_REAL_ADAPTER_TESTS") != "1":
         pytest.skip("Set RUN_REAL_ADAPTER_TESTS=1 to run real-adapter swap tests")
 

@@ -10,16 +10,14 @@ cd backend
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env   # default uses mocks; no keys needed
-pytest                              # 138 passed / 142 collected,
-                                    # 92.29% coverage on app/ — coverage
-                                    # gate enforced at 80%
+pytest                 # ~136 tests, runs offline
 uvicorn app.main:app --reload --port 8000
 
 # Frontend (Next.js)
 cd web
 npm install
 cp .env.example .env.local
-npm test                # vitest — 36 passed
+npm test                # vitest
 npm run dev             # http://localhost:3000
 ```
 
@@ -34,7 +32,6 @@ the all-mocks dev mode.
 | A property/location field   | `backend/app/domain/property.py` + `web/lib/types.ts` + `PropertyForm.tsx` |
 | A new endpoint              | `backend/app/routers/<name>.py` + `main.py` + `tests/test_<name>.py` |
 | A new DB table              | `backend/migrations/<NNN>_<name>.sql` + `app/adapters/supabase/_schema.py` + run the SQL against the real Supabase project |
-| A new property/list field   | `backend/app/domain/<entity>.py` + `web/lib/types.ts` (extra="ignore" tolerates backend drift) |
 | Adapter swap (mock → real)  | env flag in `.env` — see `adapters.md` |
 | AI prompt                   | `backend/app/adapters/ai/<provider>_mock.py` |
 | LINE handler                | `backend/app/services/lead_pipeline.py` |
@@ -124,8 +121,7 @@ LINE OA + real Anthropic":
 ## Coverage gate
 
 `backend/pyproject.toml` enforces `pytest --cov-fail-under=80`. Current
-coverage is **92.29%** on `app/` (`pytest --cov=app --cov-report=term-missing`;
-gate enforced at 80%). Real-stubs (`*_real.py`) sit at ~70% by
+coverage is **94%** on `app/`. Real-stubs (`*_real.py`) sit at ~70% by
 design — their methods raise `NotImplementedError` until wired.
 
 ## Incident on-call
