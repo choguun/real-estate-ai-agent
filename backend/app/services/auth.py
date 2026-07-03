@@ -109,6 +109,19 @@ class AuthService:
                 "password_hash": hash_password(password),
             },
         )
+
+        # T-304: every user belongs to a personal team on signup so the
+        # team-scoped routers can resolve team_id without a separate
+        # create-team step.
+        from app.services.team_service import create_team
+
+        personal = create_team(
+            self._db,
+            name=f"Personal {str(user['id'])[:8]}",
+            owner_id=user["id"],
+        )
+        user = self._db.update("users", user["id"], {"team_id": personal["id"]}) or user
+
         token = create_access_token(user["id"], user["email"], settings=self._settings)
         return {"user": _public_user(user), "token": token}
 

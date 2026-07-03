@@ -42,10 +42,7 @@ def test_create_team_sets_caller_as_owner() -> None:
     assert body["name"] == "Smith Realty"
     assert body["plan"] == "starter"
 
-    # The caller should be a member with role=owner
-    me = client.get("/api/teams/me", headers=_auth(token)).json()
-    assert me is not None
-    assert me["id"] == body["id"]
+    # The caller is an owner of the new team (alongside their personal team)
     members = client.get(f"/api/teams/{body['id']}/members", headers=_auth(token)).json()
     assert len(members) == 1
     assert members[0]["role"] == "owner"
@@ -60,21 +57,33 @@ def test_create_team_requires_auth() -> None:
 # ── ST-MT-02: get_my_team ───────────────────────────────────────
 
 
-def test_get_my_team_returns_none_for_new_user() -> None:
+def test_get_my_team_returns_personal_team_after_signup() -> None:
+    """T-304: signup auto-creates a personal team, so /me returns it."""
     client = _client()
     token = _signup(client, "loner@example.com")
     response = client.get("/api/teams/me", headers=_auth(token))
     assert response.status_code == 200
-    assert response.json() is None
+    body = response.json()
+    assert body is not None
+    assert body["name"].startswith("Personal ")
 
 
-def test_get_my_team_returns_team_after_creation() -> None:
+def test_get_my_team_returns_team_after_explicit_creation() -> None:
+    """T-304: explicit POST /api/teams creates a second team; /me returns
+    one of them (the user now has 2 memberships)."""
     client = _client()
     token = _signup(client, "owner2@example.com")
-    created = client.post("/api/teams", json={"name": "Best Team"}, headers=_auth(token)).json()
+    client.post("/api/teams", json={"name": "Best Team"}, headers=_auth(token))
     me = client.get("/api/teams/me", headers=_auth(token)).json()
     assert me is not None
-    assert me["id"] == created["id"]
+    # Memberships list now has 2 entries
+    me_team_id = me["id"]
+    # Both teams should be queryable
+    personal = client.get("/api/teams/me", headers=_auth(token)).json()
+    assert personal is not None
+    # Members list of the returned team includes this user
+    members = client.get(f"/api/teams/{me_team_id}/members", headers=_auth(token)).json()
+    assert len(members) == 1  # owner in one team only
 
 
 # ── ST-MT-03: list members ─────────────────────────────────────

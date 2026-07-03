@@ -19,6 +19,7 @@ from app.adapters.supabase._factory import get_db
 from app.adapters.supabase.base import SupabaseAdapter
 from app.config import Settings, get_settings
 from app.services.auth import decode_token
+from app.services.team_service import get_user_team
 
 
 def get_db_dep() -> SupabaseAdapter:
@@ -97,3 +98,34 @@ def get_current_user_id(
 
 
 CurrentUserIdDep = Annotated[str, Depends(get_current_user_id)]
+
+
+def get_current_team(
+    user_id: CurrentUserIdDep,
+    db: DBDep,
+) -> str:
+    """Resolve the caller's team_id, auto-creating a personal team if needed.
+
+    This keeps the cycle 1 flow working: a user who signs up without
+    creating a team explicitly gets a 'personal-{uuid}' team auto-created
+    on first authenticated request. Multi-tenant features (invites,
+    role changes) operate on the same team.
+
+    Returns:
+        The caller's team_id (str).
+    """
+    from uuid import UUID
+
+    team = get_user_team(db, user_id=UUID(user_id))
+    if team is not None:
+        return str(team["id"])
+
+    # Auto-create a personal team so existing flows keep working
+    # without users having to explicitly POST /api/teams.
+    from app.services.team_service import create_team
+
+    new_team = create_team(db, name=f"Personal {user_id[:8]}", owner_id=UUID(user_id))
+    return str(new_team["id"])
+
+
+CurrentTeamIdDep = Annotated[str, Depends(get_current_team)]
