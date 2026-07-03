@@ -7,8 +7,10 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 
+from app.adapters.storage._factory import get_storage
+from app.adapters.storage.base import StorageAdapter
 from app.adapters.supabase._factory import get_db
 from app.adapters.supabase.base import SupabaseAdapter
 from app.config import Settings, get_settings
@@ -21,7 +23,26 @@ def get_db_dep() -> SupabaseAdapter:
 
 
 DBDep = Annotated[SupabaseAdapter, Depends(get_db_dep)]
-SettingsDep = Annotated[Settings, Depends(get_settings)]
+
+
+def get_settings_dep(request: Request) -> Settings:
+    """Resolve settings from the app's state, not the global cache.
+
+    Tests pass explicit `Settings(...)` to `create_app`; this dep picks
+    them up regardless of any other call to `get_settings()`.
+    """
+    return getattr(request.app.state, "settings", None) or get_settings()
+
+
+SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
+
+
+def get_storage_dep(settings: SettingsDep) -> StorageAdapter:
+    """Per-request storage adapter (uses settings from request.app.state)."""
+    return get_storage(settings=settings)
+
+
+StorageDep = Annotated[StorageAdapter, Depends(get_storage_dep)]
 
 
 def get_current_user_id(

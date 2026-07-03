@@ -45,6 +45,7 @@ class Settings(BaseSettings):
 
     # ── Mock storage ────────────────────────────────────────────────────
     var_dir: str = "var"
+    public_base_url: str = "http://localhost:8000"
 
     model_config = SettingsConfigDict(
         env_file=".env",

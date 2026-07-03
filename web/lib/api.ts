@@ -59,15 +59,14 @@ export function clearAuthToken(): void {
   setAuthToken(null);
 }
 
-async function request<T>(
-  path: string,
-  init: RequestInit = {},
-): Promise<T> {
+/**
+ * Low-level fetch — pass the init object straight through, including a
+ * pre-serialized body. For JSON helpers see `apiGet`/`apiPost`/`apiPatch`.
+ * For multipart uploads use `apiUpload`.
+ */
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
   const headers = new Headers(init.headers);
-  if (init.body && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
   const token = readToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
   const res = await fetch(`${baseUrl}${path}`, { ...init, headers, cache: "no-store" });
@@ -90,15 +89,19 @@ export async function apiGet<T>(path: string): Promise<T> {
 }
 
 export async function apiPost<T>(path: string, body: unknown): Promise<T> {
-  return request<T>(path, { method: "POST", body: JSON.stringify(body) });
-}
-
-export async function checkBackendHealth(): Promise<{ status: string }> {
-  return apiGet<{ status: string }>("/health");
+  return request<T>(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
 export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
-  return request<T>(path, { method: "PATCH", body: JSON.stringify(body) });
+  return request<T>(path, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
 export async function apiDelete<T>(path: string): Promise<T> {
@@ -107,4 +110,13 @@ export async function apiDelete<T>(path: string): Promise<T> {
 
 export async function apiPostNoBody<T>(path: string): Promise<T> {
   return request<T>(path, { method: "POST" });
+}
+
+/** Multipart upload — FormData is sent as-is; browser sets the boundary header. */
+export async function apiUpload<T>(path: string, formData: FormData): Promise<T> {
+  return request<T>(path, { method: "POST", body: formData });
+}
+
+export async function checkBackendHealth(): Promise<{ status: string }> {
+  return apiGet<{ status: string }>("/health");
 }
