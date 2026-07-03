@@ -72,17 +72,47 @@ async def line_webhook(
     results: list[dict[str, Any]] = []
 
     # 4. Only resolve an agent if there are events to process.
+    #
+    # Routing priority (P1-W3):
+    #   1. LINE_DEFAULT_TEAM_ID env var → attribute all events to that
+    #      team directly (bypasses agent lookup). Use this for multi-tenant
+    #      deploys where each LINE channel belongs to exactly one team.
+    #   2. LINE_DEFAULT_AGENT_ID env var → attribute to that agent's team
+    #      (uses the agent's users.team_id, which is set on signup).
+    #   3. Fallback: first active user. Logs a warning since this is
+    #      non-deterministic in multi-team setups.
     if events:
-        agent_id: str | None = settings.line_default_agent_id
-        if agent_id is None:
+        if settings.line_default_team_id:
+            agent_id = _agent_id_for_team(db, settings.line_default_team_id)
+            if agent_id is None:
+                logger.error(
+                    "LINE webhook: LINE_DEFAULT_TEAM_ID=%s has no members",
+                    settings.line_default_team_id,
+                )
+                raise HTTPException(
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="LINE_DEFAULT_TEAM_ID has no members",
+                )
+        elif settings.line_default_agent_id:
+            agent_id = settings.line_default_agent_id
+        else:
             candidates = db.query("users", filters={"is_active": True})
             if not candidates:
-                logger.error("LINE webhook: no agent (no LINE_DEFAULT_AGENT_ID and no users in DB)")
+                logger.error(
+                    "LINE webhook: no agent (set LINE_DEFAULT_TEAM_ID or "
+                    "LINE_DEFAULT_AGENT_ID, or have at least one user in DB)"
+                )
                 raise HTTPException(
                     status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail="No agent configured to attribute LINE leads to",
                 )
             agent_id = candidates[0]["id"]
+            logger.warning(
+                "LINE webhook: no LINE_DEFAULT_TEAM_ID or "
+                "LINE_DEFAULT_AGENT_ID set; falling back to first active user. "
+                "This is non-deterministic in multi-team setups — set the env "
+                "vars for production."
+            )
 
         pipeline = LeadPipeline(db)
         for event in events:
@@ -94,6 +124,7 @@ async def line_webhook(
                 if event.get("type") == "message":
                     _cache_reply_token(line, event)
 
+                assert agent_id is not None
                 results.append(_as_dict(pipeline.process_event(event, agent_id=agent_id)))
             except Exception:
                 logger.exception("LINE pipeline crashed on event; skipping")
@@ -105,6 +136,21 @@ async def line_webhook(
         "processed": processed_count,
         "results": results,
     }
+
+
+def _agent_id_for_team(db: Any, team_id: str) -> str | None:
+    """Return the first active user in `team_id`, or None if empty."""
+    members = db.query(
+        "team_memberships",
+        filters={"team_id": team_id},
+    )
+    for m in members:
+        if m.get("left_at") is not None:
+            continue
+        user = db.get_by_id("users", m["user_id"])
+        if user and user.get("is_active", True):
+            return str(user["id"])
+    return None
 
 
 def _cache_reply_token(line: Any, event: dict[str, Any]) -> None:

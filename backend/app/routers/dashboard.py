@@ -1,7 +1,11 @@
 """Dashboard router — the agent's home screen payload.
 
+T-304: scoped by `team_id` (the caller's current team) — every agent
+in a team sees the same dashboard (team-wide new leads, recent
+messages, recent properties).
+
 Three blocks for /api/dashboard:
-1. `new_leads_count` — number of leads with status='new' for the caller
+1. `new_leads_count` — number of leads with status='new' for the team
 2. `recent_inbound` — last 20 inbound messages, each enriched with lead meta
 3. `recent_properties` — last 5 properties (newest by updated_at, archived hidden)
 
@@ -16,15 +20,15 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from app.deps import CurrentUserIdDep, DBDep
+from app.deps import CurrentTeamIdDep, DBDep
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
 
 @router.get("/dashboard")
-def get_dashboard(db: DBDep, user_id: CurrentUserIdDep) -> dict[str, Any]:
-    # 1. New leads count — status='new' scoped to the calling user.
-    all_leads = db.query("leads", filters={"user_id": user_id})
+def get_dashboard(db: DBDep, team_id: CurrentTeamIdDep) -> dict[str, Any]:
+    # 1. New leads count — status='new' scoped to the calling team.
+    all_leads = db.query("leads", filters={"team_id": team_id})
     new_leads_count = sum(1 for ld in all_leads if ld.get("status") == "new")
 
     # 2. Recent inbound messages (last 20), enriched with lead preview.
@@ -33,11 +37,10 @@ def get_dashboard(db: DBDep, user_id: CurrentUserIdDep) -> dict[str, Any]:
         ld["id"]: ld for ld in all_leads if isinstance(ld.get("id"), str)
     }
 
-    inbound = [
-        m
-        for m in db.query("messages", filters={"user_id": user_id})
-        if m.get("direction") == "inbound"
-    ]
+    # T-304: messages are team-scoped; cross-team defense (the mock
+    # doesn't have RLS, so we filter explicitly).
+    all_team_messages = db.query("messages", filters={"team_id": team_id})
+    inbound = [m for m in all_team_messages if m.get("direction") == "inbound"]
     inbound.sort(
         key=lambda m: (m.get("created_at") or "", m.get("id") or ""),
         reverse=True,
@@ -48,11 +51,10 @@ def get_dashboard(db: DBDep, user_id: CurrentUserIdDep) -> dict[str, Any]:
         lead_preview: dict[str, Any] | None = None
         if lead_id:
             row = leads_by_id.get(lead_id)
-            # Defense-in-depth: re-check ownership even though all_leads
-            # is already user-scoped. If a future code path inserts a
-            # message whose lead belongs to another user, this guard
-            # prevents leaking that lead's name / line_user_id.
-            if row is not None and row.get("user_id") == user_id:
+            # Cross-team defense: even though all_leads is team-scoped,
+            # a stale row whose lead_id is no longer in this team's
+            # leads dict should not leak. (Belt + suspenders.)
+            if row is not None and row.get("team_id") == team_id:
                 lead_preview = {
                     "id": row.get("id"),
                     "name": row.get("name"),
@@ -61,7 +63,7 @@ def get_dashboard(db: DBDep, user_id: CurrentUserIdDep) -> dict[str, Any]:
         recent_inbound.append({**m, "lead": lead_preview})
 
     # 3. Recent properties (last 5, newest first by updated_at, archived hidden).
-    properties = db.query("properties", filters={"user_id": user_id})
+    properties = db.query("properties", filters={"team_id": team_id})
     properties = [p for p in properties if p.get("status") != "archived"]
     properties.sort(
         key=lambda p: (p.get("updated_at") or "", p.get("created_at") or ""),
