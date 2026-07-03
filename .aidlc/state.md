@@ -15,7 +15,7 @@
     - vitest: 36/36 ✅
     - next lint + tsc + build: clean
   - **Final PR:** https://github.com/choguun/real-estate-ai-agent/pull/1
-    - 19 commits, +20,716 lines, 132 files (per `git diff --shortstat $(git rev-list --max-parents=0 HEAD) HEAD`)
+    - 19 commits, +20,732 lines, 132 files (per `git diff --shortstat $(git rev-list --max-parents=0 HEAD) HEAD`)
   - To bring up real Supabase + LINE + Anthropic later, flip env flags —
     see `docs/adapters.md`. Zero router changes required.
   - **Tier-1 + Tier-2 review fixes applied:**
