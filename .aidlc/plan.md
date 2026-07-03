@@ -1,508 +1,325 @@
-# Plan: Month-1 MVP — Real Estate AI Agent (Thailand)
+# Plan: AIDLC Cycle 2 — Real Adapter Wiring
 
-> **Phase:** planning
-> **Branch:** `feat/month-1-mvp` · **PR:** #1
-> **Source:** [`.aidlc/spec.md`](./spec.md) (12 ACs, 20 test scenarios)
-> **Strategy:** 12 vertical slices, mostly sequential, each ends with a
-> green test suite. Coverage target ≥ 80 % lines for `backend/app/`.
+> **Status:** DRAFT (proposal; pending user approval)
+> **Date:** 2026-07-03
+> **Prerequisite:** Month-1 MVP shipped to `main` via PR #1 + PR #2
+> **Branch (proposed):** `feat/real-adapter-wiring`
+> **Source brief:** the spec's "Out of Scope (Month 1)" + `docs/adapters.md`
+> "Per-adapter status" table.
 
 ---
 
-## Dependency Graph
+## Why this cycle
 
+Month-1 MVP runs against mocks. Every external integration ships as a
+`NotImplementedError` skeleton behind a Protocol boundary. The boundary
+itself is correct and stable (the mock-first dev loop, tests, and docs
+all rely on it). What's missing is the **real wiring** that turns the
+mocks into production services.
+
+Without this cycle:
+- Deploying to real users is impossible.
+- `RUN_REAL_ADAPTER_TESTS=1` raises `NotImplementedError` on every call.
+- The `Real*Adapter` shells are dead code (CI passes only because the
+  `if isinstance(adapter, Real*)` isinstance checks succeed, not because
+  the methods do anything).
+
+This cycle lights up the four real adapter implementations so the same
+backend restarts against real Supabase + LINE + Anthropic + Supabase
+Storage by flipping env flags (per `docs/adapters.md`).
+
+---
+
+## Goal
+
+When this cycle ships, a deployer can:
+
+```bash
+# .env (real)
+USE_MOCKS=false
+SUPABASE_URL=https://abc.supabase.co
+SUPABASE_ANON_KEY=eyJ...
+LINE_CHANNEL_SECRET=...
+LINE_CHANNEL_ACCESS_TOKEN=...
+ANTHROPIC_API_KEY=sk-...
 ```
-T-001 ──▶ T-002 ──▶ T-003 ──▶ T-004 ──┬─▶ T-005 ──▶ T-006 ──▶ T-007 ──┐
-   │          │          │          │                                    │
-   │          │          │          ├─▶ T-008 ──▶ T-009 ──▶ T-010 ──────┤
-   │          │          │          │                     │              │
-   │          │          │          ▼                     ▼              ▼
-   │          │          │       (storage)            (auth + leads)   (UI)
-   │          │          └──────────────────────────────────────────────┘
-   │          └──── (mock DB shared across all)
-   └──── (CI gates every commit)
 
-                                       ┌──▶ T-011 (dashboard)
-                                       │       │
-                                       ▼       ▼
-                                  T-012 (E2E + docs)  ◀── depends on all
+…and the backend will:
+- Authenticate via real Supabase Auth
+- Read/write `properties` / `leads` / `messages` / `generated_listings`
+  via Supabase REST (PostgREST) with the same scoping logic the mock
+  uses
+- Verify LINE webhook signatures the same way (already done in T-008)
+- Send outbound LINE messages via the Reply API
+- Generate Thai listings via Anthropic Claude 3.5 Sonnet (real LLM
+  call, real cost)
+- Upload images to Supabase Storage, return public/signed URLs
+
+…with **zero router code changes** — the existing `Depends(get_supabase)`
+etc. dispatch transparently.
+
+---
+
+## Non-goals (still out of scope after this cycle)
+
+- Multi-tenant teams / RLS policies (only single-tenant user-scoping)
+- WebSockets / real-time push (still polling)
+- Image vision (Claude vision API) — text-only prompts
+- Auto-posting to DDProperty / Livinginsider / Facebook
+- Payments / billing
+- Audit log UI
+- Sentry / OpenTelemetry
+- i18n beyond Thai + English
+
+These remain candidates for **Cycle 3+**.
+
+---
+
+## Strategy
+
+Four vertical slices, one per adapter. Each slice is independently
+committable and end-to-end testable against a **test server** (httpx
+MockTransport or a free-tier dev instance) so we don't rack up real API
+costs in CI.
+
+```dot
+digraph real_wiring {
+    T-101 [label="T-101: Real Supabase adapter"];
+    T-102 [label="T-102: Real LINE adapter"];
+    T-103 [label="T-103: Real AI adapter (Anthropic)"];
+    T-104 [label="T-104: Real Storage adapter"];
+    T-105 [label="T-105: Live smoke tests + CI opt-in + docs"];
+
+    T-101 -> T-105;
+    T-102 -> T-105;
+    T-103 -> T-105;
+    T-104 -> T-105;
+}
 ```
 
-**Sequencing** is mostly linear because auth (T-003) gates every
-authenticated route. The one parallelizable branch is **T-008 (LINE
-webhook signature)** which is adapter-only and can be developed
-alongside T-005–T-007. Inside those, T-005 (storage) does not need
-T-006 (AI); they meet at T-007.
+T-105 is the integration task: live smoke tests run via
+`RUN_REAL_ADAPTER_TESTS=1` against a **dev project** (not CI), CI stays
+green on the mock path, and docs are updated to walk deployers through
+the env flag flip.
+
+**Parallelism:** T-101 / T-102 / T-103 / T-104 are all adapter-only and
+can be developed in parallel. They're sequential commits on the same
+branch but no cross-task dependencies.
 
 ---
 
-## Conventions for every task
+## Tasks
 
-- **RED → GREEN → REFACTOR** loop in every task (TDD). Implementer
-  writes the failing test first, makes it pass, then cleans up.
-- **Each task is independently committable** — the repo builds, lints,
-  and tests green at every step. Never leave the tree red.
-- **No horizontal slices.** Each task delivers a user-visible thing,
-  even if small (an empty list page that fetches and renders is fine).
-- **Mock-first.** Default `USE_MOCKS=true`; real adapters ship as
-  stubs but are not required for tests to pass.
-
----
-
-### T-001: Repo scaffold, FastAPI + Next.js shells, `/health` endpoints, CI
+### T-101: Real Supabase adapter
 
 **Files:**
-- `backend/pyproject.toml` (new)         — ruff + mypy + pytest config
-- `backend/requirements.txt` (new)       — fastapi, uvicorn[standard], pydantic-settings, python-dotenv, pytest, httpx, ruff, mypy, bcrypt, PyJWT
-- `backend/app/__init__.py` (new)
-- `backend/app/main.py` (new)            — FastAPI factory, CORS, error handlers
-- `backend/app/config.py` (new)          — pydantic-settings.BaseSettings
-- `backend/app/routers/__init__.py` (new)
-- `backend/app/routers/health.py` (new)  — `GET /health`
-- `backend/tests/__init__.py` (new)
-- `backend/tests/conftest.py` (new)      — TestClient fixture
-- `backend/tests/test_health.py` (new)   — **ST-001**
-- `backend/.env.example` (new)
-- `web/package.json` (new)               — Next.js 15 deps
-- `web/next.config.mjs` (new)
-- `web/tsconfig.json` (new)
-- `web/tailwind.config.ts` (new)
-- `web/postcss.config.mjs` (new)
-- `web/app/layout.tsx` (new)
-- `web/app/page.tsx` (new)               — landing page that calls `/api/health`
-- `web/app/api/health/route.ts` (new)    — proxy to backend `/health`
-- `web/.env.example` (new)
-- `web/components.json` (new)            — shadcn/ui config
-- `.github/workflows/ci.yml` (new)       — lint + test matrix
+- `backend/app/adapters/supabase/real.py` (replace skeleton)
+- `backend/app/adapters/supabase/real_auth.py` (new — Supabase Auth helpers)
+- `backend/tests/adapters/test_real_supabase.py` (new — httpx MockTransport)
+- `requirements.txt` (no new deps; httpx already present)
 
 **Description:**
-Set up both packages to the point that `npm run dev` and `uvicorn
-app.main:app --reload` run independently and the landing page can
-fetch `/api/health` → `/health` → `{"status":"ok"}`. CI runs ruff +
-pytest on the backend and lint + tsc on the frontend.
+Replace `NotImplementedError` with real PostgREST calls. Use httpx
+async client + `Authorization: Bearer <anon_key>` (and per-user
+service-role key when needed). Translate between Supabase's JSON
+response shape and the Protocol's `dict[str, Any]`. Apply the same
+scoping logic the mock uses (filter by `user_id=eq.<uuid>` on every
+list / get / update / delete).
+
+**Why this is a separate task:** the 16 methods in `SupabaseAdapter`
+need 16 tests, each with an httpx MockTransport fixture returning a
+realistic Supabase REST envelope. This is a substantial PR on its own.
 
 **Acceptance criteria:**
-- [ ] `cd backend && uvicorn app.main:app --reload` starts on :8000
-- [ ] `curl :8000/health` returns `{"status":"ok"}` (ST-001)
-- [ ] `cd web && npm run dev` starts on :3000
-- [ ] Landing page shows "Backend: ok" pulled via `/api/health`
-- [ ] `ruff check` + `mypy --strict` pass
-- [ ] `npm run lint` + `npm run typecheck` pass
-- [ ] GitHub Actions workflow runs both matrices on PR
+- [ ] All 16 Protocol methods implemented (CRUD across 5 tables +
+  auth helpers + lead/message lookups + listing save/list)
+- [ ] Per-user scoping enforced via PostgREST filters
+- [ ] RLS awareness: if Supabase returns 401/403, the adapter raises a
+  typed `PermissionError` (router maps to 403)
+- [ ] `RUN_REAL_ADAPTER_TESTS=1 pytest tests/adapters/test_real_supabase.py`
+  green (uses MockTransport — no network)
+- [ ] `if not RUN_REAL_ADAPTER_TESTS: skip` so CI stays green
 
-**Test approach:**
-- pytest for `/health` (200, body shape, no auth).
-- Skip Next.js page tests in this task (added in T-005/T-007).
+**Estimated effort:** L (split into T-101a core CRUD, T-101b auth, T-101c edge cases)
+
+---
+
+### T-102: Real LINE adapter
+
+**Files:**
+- `backend/app/adapters/line/real.py` (replace skeleton)
+- `backend/app/adapters/line/bot_info.py` (new — bot info fetch w/ TTL cache)
+- `backend/app/adapters/line/transforms.py` (new — Markdown strip +
+  length chunker from PR #2, promoted into the real adapter)
+- `backend/tests/adapters/test_real_line.py` (new)
+
+**Description:**
+Implement `send_reply()` via httpx POST to
+`https://api.line.me/v2/bot/message/reply` with `Authorization: Bearer
+<channel_access_token>`. Fetch `/v2/bot/info` once at startup to populate
+`bot_user_id` (cached), enable the self-message echo filter. Apply
+outbound transforms (Markdown strip + 5-message / 4500-char chunker)
+before sending.
+
+**Acceptance criteria:**
+- [ ] `send_reply()` hits the real Reply API (httpx MockTransport test)
+- [ ] Self-message filter blocks `line_user_id == bot_user_id`
+- [ ] Markdown stripped before send (test asserts with `**bold**` input)
+- [ ] 5-message / 4500-char chunker tested w/ 11 fixtures (from PR #2)
+- [ ] 1 MiB body cap on inbound webhook (already added in PR #2; verify
+  it's still wired through the real handler)
 
 **Estimated effort:** M
 
 ---
 
-### T-002: Mock Supabase adapter + migration runner
+### T-103: Real AI adapter (Anthropic Claude 3.5 Sonnet)
 
 **Files:**
-- `backend/app/adapters/__init__.py` (new)
-- `backend/app/adapters/supabase/__init__.py` (new)
-- `backend/app/adapters/supabase/base.py` (new)        — `SupabaseAdapter` Protocol
-- `backend/app/adapters/supabase/mock.py` (new)        — in-memory implementation
-- `backend/app/adapters/supabase/real.py` (new)        — httpx client (stub for MVP; no real calls in tests)
-- `backend/app/adapters/supabase/_schema.py` (new)     — schema definitions from `migrations/`
-- `backend/migrations/__init__.py` (new)
-- `backend/migrations/001_init.sql` (new)              — copy of `DB.md` schema
-- `backend/app/deps.py` (new)                          — `get_db()` dependency selector
-- `backend/tests/adapters/__init__.py` (new)
-- `backend/tests/adapters/test_mock_supabase.py` (new) — CRUD round-trip per table (ST-020)
-- `backend/tests/conftest.py` (edit)                   — schema-applied fixture per test
+- `backend/app/adapters/ai/anthropic_real.py` (replace skeleton)
+- `backend/app/adapters/ai/prompts.py` (new — versioned prompt templates)
+- `backend/app/adapters/ai/anthropic_real_client.py` (new — SDK wrapper
+  with retries + circuit breaker)
+- `requirements.txt` (add `anthropic>=0.40`)
+- `backend/tests/adapters/test_real_ai.py` (new)
 
 **Description:**
-Every external integration lives behind a Protocol. The mock
-implementation stores everything in process memory and applies
-`migrations/001_init.sql` on startup (and per-test fixture). The real
-client file exists as a stub — it implements the Protocol so the code
-imports cleanly, but real-network code paths are not exercised in MVP.
+Use the `anthropic` Python SDK to call Claude 3.5 Sonnet. The prompt is
+Thai-listing-focused, with the property features from the spec. Map
+SDK response → Protocol `dict`. On `429` / `5xx` / `TimeoutException`,
+fall back to Gemini per OQ-F. On `4xx` (other than 429), surface the
+error.
 
 **Acceptance criteria:**
-- [ ] `SupabaseAdapter` Protocol defines: `query(table, filters)`, `insert(table, row)`, `update(table, id, patch)`, `delete(table, id)`
-- [ ] Mock applies `001_init.sql` on startup; tables `users`,
-      `properties`, `leads`, `messages`, `appointments`,
-      `generated_listings`, `contracts`, `user_settings`, `audit_logs`
-      exist with the columns from `DB.md`
-- [ ] Round-trip CRUD works for at least 3 tables in tests (ST-020)
-- [ ] `USE_REAL_SUPABASE=1` switches `get_db()` to the real client (no network calls in tests)
-- [ ] Mock snapshot test: identical inputs → identical returned rows
-
-**Test approach:**
-- pytest, parametrized over tables.
-- Each test scopes its own mock-DB fixture (re-applies migration → fast).
+- [ ] Real Anthropic call works (httpx MockTransport test simulates
+  `messages.create` response)
+- [ ] 429 / 5xx / timeout → silent Gemini fallback
+- [ ] 4xx (non-429) → raises typed `AIRateLimitError` or `AIError`
+- [ ] Prompt versioned (`prompts.py::LISTING_PROMPT_V1`) so we can A/B
+  without code rewrites
+- [ ] Latency logged (start of the audit log story for AI)
 
 **Estimated effort:** M
 
 ---
 
-### T-003: Auth (signup / login / LIFF), JWT, frontend `/login` + `/signup`
+### T-104: Real Storage adapter (Supabase Storage)
 
 **Files:**
-- `backend/app/domain/__init__.py` (new)
-- `backend/app/domain/user.py` (new)              — `User` pydantic model
-- `backend/app/services/__init__.py` (new)
-- `backend/app/services/auth.py` (new)            — `hash_password`, `verify_password`, `create_access_token`, `decode_token`
-- `backend/app/routers/auth.py` (new)             — POST /api/auth/{signup,login,liff}
-- `backend/app/deps.py` (edit)                    — `CurrentUser` dep
-- `backend/app/main.py` (edit)                    — register `auth` router
-- `backend/tests/test_auth.py` (new)              — ST-002, ST-003, ST-004
-- `web/lib/auth.ts` (new)                         — typed `login`, `signup`, `liffLogin`
-- `web/lib/api.ts` (new)                          — fetch wrapper attaching `Authorization: Bearer <token>`
-- `web/app/(auth)/layout.tsx` (new)
-- `web/app/(auth)/login/page.tsx` (new)
-- `web/app/(auth)/signup/page.tsx` (new)
-- `web/components/forms/AuthForms.tsx` (new)      — both forms
-- `web/__tests__/auth.test.ts` (new)              — `lib/auth.ts` happy paths
+- `backend/app/adapters/storage/supabase_real.py` (replace skeleton)
+- `backend/tests/adapters/test_real_storage.py` (new)
 
 **Description:**
-Three login paths land in one JWT. Passwords are bcrypt-hashed. LIFF
-login is stubbed — clicking the LIFF button calls `POST /api/auth/liff`
-with a fake `line_user_id` and gets back a session, no real OAuth in
-MVP. JWT is signed with HS256 + a configurable secret; `CurrentUser`
-dependency verifies it on every protected router.
+`save()` uploads to Supabase Storage via `POST /storage/v1/object/{bucket}/{path}`
+using the service-role key, then returns a public URL
+(`{SUPABASE_URL}/storage/v1/object/public/{bucket}/{path}`). For private
+buckets, generate a signed URL via `POST /storage/v1/object/sign/{bucket}/{path}`.
 
 **Acceptance criteria:**
-- [ ] `POST /api/auth/signup` 200 + JWT for new email; 409 on duplicate (ST-002)
-- [ ] `POST /api/auth/login` 200 + JWT for valid creds; 401 on bad password (ST-003)
-- [ ] `POST /api/auth/liff` 200 + JWT, creates user keyed on `line_user_id` (ST-004)
-- [ ] `GET /api/auth/me` returns current user when `Authorization` is valid; 401 otherwise
-- [ ] `/login` and `/signup` pages work with shadcn forms
-- [ ] LIFF button on `/login` calls the mock endpoint
-- [ ] JWT bearer is sent on all subsequent API calls via `lib/api.ts`
+- [ ] `save()` POSTs to Supabase Storage (httpx MockTransport test)
+- [ ] Returns the public/signed URL in the same shape the router
+  consumes (`{"url": str}`)
+- [ ] Bucket configurable via `SUPABASE_STORAGE_BUCKET` env (default
+  `uploads`)
+- [ ] 10 MB cap + MIME allow-list enforced client-side (same as mock)
 
-**Test approach:**
-- pytest: signup/login/LIFF/me with success + failure cases.
-- vitest: `lib/auth.ts` types + token storage.
+**Estimated effort:** S/M
+
+---
+
+### T-105: Live smoke tests + CI opt-in + docs
+
+**Files:**
+- `backend/tests/test_live_smoke.py` (new — `RUN_LIVE_SMOKE=1` only)
+- `.github/workflows/ci.yml` (add a `live-smoke` job, manual `workflow_dispatch`)
+- `docs/adapters.md` (mark "real wiring shipped" rows)
+- `docs/runbook.md` (add "Bring up real services" section)
+- `README.md` (add "Production deploy" badge / section)
+- `.env.example` (mark which envs become required when `USE_MOCKS=false`)
+
+**Description:**
+Wire the new real-adapter tests so they:
+- Run against `httpx.MockTransport` in CI (no network)
+- Optionally run against a real dev project in `workflow_dispatch` mode
+  (secrets from GitHub Actions)
+- Are skipped in regular CI (`RUN_REAL_ADAPTER_TESTS=0` is the default)
+
+Update docs to:
+- Mark each adapter row in `docs/adapters.md` as "Real wiring shipped"
+- Add a `docs/runbook.md` "Bring up real services" section that walks
+  through creating a Supabase project, a LINE OA, an Anthropic key
+- Add the production deploy path to `README.md`
+
+**Acceptance criteria:**
+- [ ] All 4 real adapters have at least one httpx-MockTransport test
+  that runs in CI (not skipped)
+- [ ] `RUN_LIVE_SMOKE=1` runs against a real dev project (manual
+  workflow_dispatch)
+- [ ] `docs/adapters.md` updated with shipping status
+- [ ] `docs/runbook.md` "Bring up real services" section walks through
+  Supabase + LINE + Anthropic setup
+- [ ] `README.md` has a Production section linking to the runbook
+- [ ] `pytest --cov=app --cov-fail-under=80` still passes (real adapters
+  are excluded from coverage as before)
 
 **Estimated effort:** M
 
 ---
 
-### T-004: Properties domain + CRUD API + frontend list page
+## Risk register
 
-**Files:**
-- `backend/app/domain/property.py` (new)         — `Property`, `PropertyType`, `PropertyStatus` enums
-- `backend/app/routers/properties.py` (new)      — CRUD: list, create, get, update, archive
-- `backend/app/main.py` (edit)                   — register router
-- `backend/tests/test_properties.py` (new)       — ST-005
-- `web/lib/types.ts` (new)                       — `Property` zod schema mirroring backend
-- `web/app/(app)/layout.tsx` (new)               — auth-gated layout
-- `web/app/(app)/properties/page.tsx` (new)      — server component fetching from backend
-- `web/components/properties/PropertyCard.tsx` (new)
-- `web/__tests__/api.test.ts` (new)              — `getProperties()` shapes
-
-**Description:**
-Authenticated agent can CRUD property records. The frontend `/properties`
-page is a server component that renders cards with district/price/type.
-Archive flips status to `archived` (soft delete — recoverable).
-
-**Acceptance criteria:**
-- [ ] CRUD all return correct status codes (200/201/204/404/422)
-- [ ] Properties are scoped to `user_id` (cross-user reads return 404)
-- [ ] `archived` properties hidden from default list endpoint
-- [ ] `/properties` renders cards with title, district, price (formatted THB)
-
-**Test approach:**
-- pytest: CRUD cases + auth gate + cross-user 404.
-- vitest: zod parse + THB formatter.
-
-**Estimated effort:** M
+| Risk | Likelihood | Impact | Mitigation |
+|------|------------|--------|------------|
+| Anthropic API costs in CI | M | H | httpx MockTransport by default; live calls opt-in via env |
+| Supabase RLS friction | M | M | Single-tenant user-scoping only; RLS stays off for MVP |
+| LINE Reply API rate limits (free tier) | L | M | Mock by default; live opt-in only on dev project |
+| Real adapter tests flake on slow CI | L | L | httpx MockTransport; no network in CI |
+| Schema mismatch between mock + real | L | H | Same `migrations/001_init.sql` runs in both (already true) |
 
 ---
 
-### T-005: Mock storage adapter + property NEW form with image upload
+## Out of scope (deferred to Cycle 3+)
 
-**Files:**
-- `backend/app/adapters/storage/__init__.py` (new)
-- `backend/app/adapters/storage/base.py` (new)         — `StorageAdapter` Protocol
-- `backend/app/adapters/storage/local_mock.py` (new)   — writes to `backend/var/uploads/`
-- `backend/app/adapters/storage/supabase_real.py` (new) — stub for MVP
-- `backend/app/routers/storage.py` (new)               — POST /api/upload-image
-- `backend/app/main.py` (edit)                         — register router + mount `/static` for mock
-- `backend/tests/test_storage.py` (new)                — ST-015
-- `backend/app/routers/properties.py` (edit)           — accept `images: list[str]`
-- `web/app/(app)/properties/new/page.tsx` (new)
-- `web/components/forms/PropertyForm.tsx` (new)
-- `web/components/forms/ImageUploader.tsx` (new)
-- `web/__tests__/propertyForm.test.tsx` (new)          — ST-016 (preview shown)
+These remain out of scope after this cycle ships. Listing them so the
+next AIDLC cycle can pick them up deliberately:
 
-**Description:**
-Storage abstraction lets the mock adapter write to disk and the real
-one upload to Supabase Storage. The frontend `PropertyForm` includes a
-file picker that previews thumbnails and uploads on submit.
-
-**Acceptance criteria:**
-- [ ] `POST /api/upload-image` accepts `multipart/form-data`, persists under `var/uploads/{uuid}.{ext}`, returns absolute URL (ST-015)
-- [ ] Returned URL serves the file via `GET /static/{filename}` → 200 + correct MIME (ST-020)
-- [ ] `PropertyForm` shows upload progress + preview (ST-016)
-- [ ] Submitting form with images persists URLs to `properties.images`
-
-**Test approach:**
-- pytest: upload happy path + extension guard.
-- vitest/RTL: form preview state.
-
-**Estimated effort:** M
+- Multi-tenant teams (RLS policies)
+- WebSockets / real-time push
+- Image vision (Claude Vision API)
+- Auto-posting to DDProperty / Livinginsider / Facebook
+- Payments / billing
+- Audit log UI
+- Sentry / OpenTelemetry
+- i18n beyond Thai + English
+- Mobile app, native LINE Flex Messages
+- Contract generation / e-signature / PDF export
+- Google Calendar two-way sync
+- CRM analytics (conversion funnels, revenue dashboards)
 
 ---
 
-### T-006: Mock AI adapter + generate-listing endpoint + integrate into form
+## Coverage + quality bar (unchanged from Month 1)
 
-**Files:**
-- `backend/app/adapters/ai/__init__.py` (new)
-- `backend/app/adapters/ai/base.py` (new)             — `AiAdapter` Protocol: `generate_listing(property, platform) -> GeneratedContent`
-- `backend/app/adapters/ai/anthropic_mock.py` (new)   — deterministic Thai templates
-- `backend/app/adapters/ai/anthropic_real.py` (new)   — stub for MVP (offline)
-- `backend/app/adapters/ai/gemini_mock.py` (new)
-- `backend/app/adapters/ai/gemini_real.py` (new)      — stub
-- `backend/app/services/listing_generator.py` (new)   — picks adapter by env, applies fallback chain
-- `backend/app/domain/listing.py` (new)               — `GeneratedListing` model + `Platform` enum
-- `backend/app/routers/ai.py` (new)                   — POST /api/generate-listing
-- `backend/app/main.py` (edit)                        — register router
-- `backend/tests/test_ai_generator.py` (new)          — ST-006, ST-007
-- `web/components/forms/ListingPreview.tsx` (new)     — shows 4 platform tabs
-- `web/app/(app)/properties/new/page.tsx` (edit)     — add "Generate" button
-
-**Description:**
-The mock AI adapter returns Thai text templated by property type and
-platform. Latency is bounded (≤2 s in mock mode). The frontend form
-gets a "Generate" button that calls the API and renders four tabs
-(DDProperty, Livinginsider, Facebook, General).
-
-**Acceptance criteria:**
-- [ ] `POST /api/generate-listing` returns four `GeneratedContent`
-      blocks with Thai fields (ST-006)
-- [ ] Condo inputs produce text containing "คอนโด" + "ตร.ม." (ST-006)
-- [ ] House inputs mention "บ้านเดี่ยว" or "บ้าน" (ST-007)
-- [ ] Mock response includes hashtags for Facebook (≥ 5 hashtags)
-- [ ] Anthropic configured but errors → falls back to Gemini (via
-      `listing_generator` service) without leaking internal errors
-- [ ] Latency p99 ≤ 2 s in mock mode
-- [ ] Render 4 platform tabs in `ListingPreview`
-
-**Test approach:**
-- pytest: per-property-type fixtures, per-platform assertions,
-  substring checks, latency budget assertion.
-
-**Estimated effort:** M
+- `pytest -q --cov=app --cov-fail-under=80` (real adapters excluded
+  from coverage as before, per `pyproject.toml` `[tool.coverage.run]`
+  `omit = ["app/adapters/*_real.py"]`)
+- `ruff check + ruff format --check` clean
+- `mypy app/` strict, 0 errors
+- Frontend: `npm run lint + typecheck + vitest` clean
 
 ---
 
-### T-007: Generated listing persistence + property DETAIL page with editor
+## Estimated total effort
 
-**Files:**
-- `backend/app/routers/listings.py` (new)               — POST /api/listings, GET /api/listings?property_id, PATCH /api/listings/{id}
-- `backend/app/domain/listing.py` (edit)                — add `GeneratedListingInDB`
-- `backend/app/main.py` (edit)                          — register router
-- `backend/tests/test_ai_generator.py` (edit)           — ST-008
-- `web/app/(app)/properties/[id]/page.tsx` (new)
-- `web/components/forms/ListingEditor.tsx` (new)
-- `web/lib/api.ts` (edit)                               — `saveListing`, `getListings`
-
-**Description:**
-Once a generated listing is shown in the form, the user can save it to
-the `generated_listings` table. Saved listings live on the property
-detail page; each is editable in place and supports multiple platform
-variants for the same property.
-
-**Acceptance criteria:**
-- [ ] `POST /api/listings` inserts a row, returns `id`
-- [ ] `GET /api/listings?property_id=...` returns all variants for that property
-- [ ] `PATCH /api/listings/{id}` updates editable fields
-- [ ] Property detail page renders one card per platform variant (ST-008)
-- [ ] Saving from `/properties/new` redirects to `/properties/{id}`
-
-**Test approach:**
-- pytest: insert/list/update + per-user isolation.
-- vitest/RTL: editor state.
-
-**Estimated effort:** M
+| Task | Effort |
+|------|--------|
+| T-101 | L (split into 3) |
+| T-102 | M |
+| T-103 | M |
+| T-104 | S/M |
+| T-105 | M |
+| **Total** | **~5–7 days of focused work** |
 
 ---
 
-### T-008: Mock LINE adapter + webhook signature verification
-
-**Files:**
-- `backend/app/adapters/line/__init__.py` (new)
-- `backend/app/adapters/line/base.py` (new)             — `LineAdapter` Protocol
-- `backend/app/adapters/line/mock.py` (new)             — in-memory event store + signer
-- `backend/app/adapters/line/real.py` (new)             — stub for MVP
-- `backend/app/routers/line_webhook.py` (new)           — POST /webhook/line
-- `backend/app/main.py` (edit)                          — register router
-- `backend/tests/test_line_webhook.py` (new)            — ST-009, ST-010
-- `backend/app/services/__init__.py` (already created)
-
-**Description:**
-Mock LINE adapter allows tests to submit signed events and inspect
-what replies were sent. Real adapter file ships as a stub — structure
-present, no real HTTP. The webhook handler verifies `X-Line-Signature`
-via HMAC-SHA256 using `LINE_CHANNEL_SECRET` BEFORE parsing the body.
-
-**Acceptance criteria:**
-- [ ] Mock adapter signs payloads with a configurable channel secret
-- [ ] `POST /webhook/line` with valid signature → 200 (ST-009)
-- [ ] Same request with mutated signature → 401 (ST-010)
-- [ ] Same request missing header → 401
-- [ ] Verification happens BEFORE body parse (security property)
-
-**Test approach:**
-- pytest: signature positive/negative cases, header-presence cases,
-  parity with `line-bot-sdk` reference signature.
-
-**Estimated effort:** M
-
----
-
-### T-009: LINE → Lead + Message pipeline (idempotent)
-
-**Files:**
-- `backend/app/domain/lead.py` (new)              — Lead model
-- `backend/app/domain/message.py` (new)            — Message model
-- `backend/app/services/lead_pipeline.py` (new)    — `process_event(event) -> ProcessResult`
-- `backend/app/routers/line_webhook.py` (edit)     — call pipeline
-- `backend/tests/test_line_webhook.py` (edit)      — ST-011, ST-012
-
-**Description:**
-`process_event` takes a verified LINE event, dedupes by `event_id`,
-upserts a Lead by `line_user_id`, and inserts a Message with direction
-`inbound`. Replays return early. The same `line_user_id` across
-multiple events always hits the same lead.
-
-**Acceptance criteria:**
-- [ ] First message from new `line_user_id` creates exactly 1 Lead + 1 Message (ST-012)
-- [ ] Second message from same user: 0 Leads created, 1 new Message, same lead id
-- [ ] Replay (same `event_id`): 0 Leads, 0 new Messages, 200 OK (ST-011)
-- [ ] Pipeline never throws on malformed events; logs and returns processed=false
-
-**Test approach:**
-- pytest: replay + multi-message cases; per-test event-id reset.
-
-**Estimated effort:** M
-
----
-
-### T-010: Lead listing + per-lead chat UI + outbound reply via mock LINE
-
-**Files:**
-- `backend/app/routers/leads.py` (new)             — GET /api/leads, GET /api/leads/{id}, PATCH /api/leads/{id}
-- `backend/app/routers/messages.py` (new)          — POST /api/leads/{id}/messages (outbound via LINE adapter)
-- `backend/app/routers/line_webhook.py` (edit)     — outbound path plumbing
-- `backend/tests/test_leads.py` (new)
-- `web/app/(app)/leads/page.tsx` (new)             — list with status filters
-- `web/app/(app)/leads/[id]/page.tsx` (new)        — chat thread
-- `web/components/chat/MessageList.tsx` (new)
-- `web/components/chat/ComposeBox.tsx` (new)        — uses `lib/api.ts` send
-
-**Description:**
-Agent views leads and per-lead conversations; sending a reply from the
-UI hits the backend which (in mock mode) records the outbound
-`direction='outbound'` Message and (in mock mode) surfaces via the
-mock LINE adapter. In real mode, it would call LINE Reply API.
-
-**Acceptance criteria:**
-- [ ] `/api/leads` paginated, filterable by status
-- [ ] `/api/leads/{id}` includes all messages, sorted ascending
-- [ ] POST reply creates an outbound Message with `is_ai_generated=false`
-- [ ] `/leads` page shows status pills + last contact time
-- [ ] `/leads/[id]` renders inbound (left) and outbound (right) messages
-
-**Test approach:**
-- pytest: lead pagination + per-user scoping + reply round-trip.
-- vitest/RTL: chat layout snapshot.
-
-**Estimated effort:** M
-
----
-
-### T-011: Dashboard endpoint + page (recent messages, properties, lead counter)
-
-**Files:**
-- `backend/app/routers/dashboard.py` (new)         — GET /api/dashboard
-- `backend/tests/test_dashboard.py` (new)           — ST-013
-- `web/app/(app)/dashboard/page.tsx` (new)
-- `web/components/dashboard/RecentMessages.tsx` (new)
-- `web/components/dashboard/RecentProperties.tsx` (new)
-- `web/components/dashboard/NewLeadsCounter.tsx` (new)
-- `web/__tests__/dashboard.test.tsx` (new)          — ST-014
-
-**Description:**
-Single endpoint aggregates what the homepage needs: last 20 inbound
-messages, last 5 properties, count of leads with status `new`. Polled
-every 5 s client-side in MVP (no WebSocket).
-
-**Acceptance criteria:**
-- [ ] `/api/dashboard` returns all three blocks (ST-013)
-- [ ] Page renders all three in a grid
-- [ ] Counter badge shows count, dims to 0 when no new leads
-
-**Test approach:**
-- pytest: aggregation logic + scoping per user.
-- vitest: empty-state rendering.
-
-**Estimated effort:** S
-
----
-
-### T-012: Playwright E2E happy path, real-adapter swap test, architecture docs
-
-**Files:**
-- `web/playwright.config.ts` (new)
-- `web/tests/e2e/happy-path.spec.ts` (new)          — ST-018
-- `backend/tests/test_real_swap.py` (new)           — ST-019 (skipped by default)
-- `backend/tests/adapters/test_mock_ai_snapshots.py` (new) — ST-020
-- `docs/architecture.md` (new)
-- `docs/adapters.md` (new)
-- `docs/runbook.md` (new)
-- `.github/workflows/ci.yml` (edit)                  — run Playwright headless
-- `README.md` (edit)                                 — link to docs
-
-**Description:**
-End-to-end test signs up, creates a property with a fake image upload,
-generates a listing, saves it, opens the detail page. Real-adapter
-swap is verified by importing the real client modules and asserting
-they implement the same Protocol (no network calls). Docs cover
-architecture, the adapter contract, and a deploy runbook.
-
-**Acceptance criteria:**
-- [ ] Playwright spec runs green headless in CI (ST-018)
-- [ ] `python -c "from app.adapters.supabase.real import ..."` imports cleanly and satisfies `isinstance(..., SupabaseAdapter)` (ST-019)
-- [ ] Coverage report shows ≥ 80 % lines for `app/`
-- [ ] Three docs exist and link from `README.md`
-
-**Test approach:**
-- Playwright headless on a single browser.
-- `pytest --cov=app --cov-fail-under=80`.
-- `coverage` XML written + uploaded as CI artefact.
-
-**Estimated effort:** M
-
----
-
-## Coverage map (AC ↔ Task ↔ Scenario)
-
-| AC      | T-001 | T-002 | T-003 | T-004 | T-005 | T-006 | T-007 | T-008 | T-009 | T-010 | T-011 | T-012 |
-|---------|:-----:|:-----:|:-----:|:-----:|:-----:|:-----:|:-----:|:-----:|:-----:|:-----:|:-----:|:-----:|
-| AC-01   |   ●   |   ●   |   ●   |       |       |       |       |       |       |       |       |   ●   |
-| AC-02   |   ●   |       |       |       |       |       |       |       |       |       |       |       |
-| AC-03   |       |       |   ●   |       |       |       |       |       |       |       |       |       |
-| AC-04   |       |       |       |   ●   |       |       |       |       |       |       |       |       |
-| AC-05   |       |       |       |       |       |   ●   |       |       |       |       |       |       |
-| AC-06   |       |       |       |       |       |       |   ●   |       |       |       |       |       |
-| AC-07   |       |       |       |       |       |       |       |   ●   |       |       |       |       |
-| AC-08   |       |       |       |       |       |       |       |       |   ●   |   ●   |       |       |
-| AC-09   |       |       |       |       |       |       |       |       |       |       |   ●   |       |
-| AC-10   |       |       |       |       |   ●   |       |       |       |       |       |       |       |
-| AC-11   |       |       |       |       |       |       |       |       |       |       |       |   ●   |
-| AC-12   |       |   ●   |       |       |       |       |       |       |       |       |       |   ●   |
-
----
-
-## After this plan
-
-1. Commit: `git add .aidlc/ && git commit -m "plan: 12 vertical slices for Month-1 MVP"`
-2. Push to update PR #1
-3. `aidlc` next → `/implement T-001`
-
-_Updated: 2026-07-03T06:35:00Z_
+_Updated: 2026-07-03T22:15:00Z — Cycle 2 plan drafted, pending user approval._

@@ -1,30 +1,35 @@
-"""Real LINE Messaging API adapter — stub for MVP.
+"""Real LINE Messaging API adapter.
 
-Wires to the LINE Messaging API when the user provides credentials.
-For Month-1 MVP, every method that would actually hit the network
-raises ``NotImplementedError`` so the test suite stays offline.
+Wires to the LINE Reply API (free, single-bubble-or-multi) and falls
+back to Push (metered) when no reply token is cached. All outbound text
+goes through ``strip_markdown`` (LINE can't render Markdown reliably
+across iOS/Android/web/macOS) and ``split_for_line`` (5 bubbles max
+per call, 5000 chars per bubble).
 
-The structural pieces (bot user-id cache, reply-token cache,
-self-message filter) live here as the bones that the eventual
-``httpx`` wiring will need. They are exercised by
-``tests/test_line_helpers.py::TestLineRealAdapterStructure``; the mock
-maintains the same surface so routers can call these methods
-blindly. Outbound transforms (``strip_markdown``, ``split_for_line``)
-live in ``base.py`` — both adapters import them.
+Tests use ``httpx.MockTransport`` to fake the network; CI is offline.
+Real wiring runs against ``https://api.line.me`` with the channel
+access token from the LINE Developers Console.
 """
 
 from __future__ import annotations
 
 import time
+import uuid
+
+import httpx
 
 from app.adapters.line.base import (
     REPLY_TOKEN_TTL_SECONDS,
-    sign_line_webhook,
-    verify_line_webhook,
+    LineAdapter,
+    split_for_line,
+    strip_markdown,
 )
+from app.adapters.line.errors import LineAPIError, LineAuthError, LineRateLimitError
 
 
-class LineRealAdapter:
+class LineRealAdapter(LineAdapter):
+    """Real LINE adapter — implements the LineAdapter Protocol."""
+
     def __init__(
         self,
         channel_secret: str,
@@ -32,23 +37,27 @@ class LineRealAdapter:
         *,
         bot_user_id: str | None = None,
         api_base: str = "https://api.line.me",
+        transport: httpx.MockTransport | None = None,
+        timeout: float = 10.0,
     ) -> None:
         self._secret = channel_secret
         self._token = channel_access_token
-        self._api_base = api_base
+        self._api_base = api_base.rstrip("/")
+        if transport is not None:
+            self._client = httpx.Client(transport=transport, timeout=timeout)
+            self._owns_client = True
+        else:
+            self._client = httpx.Client(timeout=timeout)
+            self._owns_client = True
 
-        # Self-message filter — when real HTTP is wired, the adapter
-        # calls ``get_bot_user_id()`` at register-time to learn its own
-        # userId and ignore outbound echoes. Until then, callers can
-        # pass ``bot_user_id`` explicitly via __init__.
-        self._bot_user_id = bot_user_id
+        # Self-message filter (PR #2 bones).
+        self._bot_user_id: str | None = bot_user_id
+        self._bot_user_id_fetched_at: float | None = None
 
-        # Reply-token cache: chat_id → (token, expires_at_epoch).
-        # Inbound events call ``set_reply_token(chat_id, token)`` and
-        # ``send_reply`` consumes the entry when it actually uses the
-        # Reply API. Tokens are single-use and expire in ~60s.
+        # Reply-token cache (PR #2 bones).
         self._reply_tokens: dict[str, tuple[str, float]] = {}
 
+    # ── Properties / helpers ──────────────────────────────────
     @property
     def channel_secret(self) -> str:
         return self._secret
@@ -58,29 +67,21 @@ class LineRealAdapter:
         return self._bot_user_id
 
     def sign(self, body: bytes) -> str:
+        from app.adapters.line.base import sign_line_webhook
+
         return sign_line_webhook(body, self._secret)
 
     def verify(self, body: bytes, signature: str) -> bool:
+        from app.adapters.line.base import verify_line_webhook
+
         return verify_line_webhook(body, signature, self._secret)
 
-    # ─── Reply-token plumbing (consumed by future wiring) ────────────
     def set_reply_token(
         self, chat_id: str, token: str, *, ttl_seconds: int = REPLY_TOKEN_TTL_SECONDS
     ) -> None:
-        """Cache a Reply token off an inbound ``message`` event.
-
-        Line's Reply API is free; Push is metered. The dispatcher in
-        ``routers/line_webhook`` calls this when a real webhook is
-        wired, and ``send_reply`` consumes the entry on the Reply path.
-        """
         self._reply_tokens[chat_id] = (token, time.time() + ttl_seconds)
 
     def consume_reply_token(self, chat_id: str) -> tuple[str | None, bool]:
-        """Pop a stashed Reply token if present and unexpired.
-
-        Returns ``(token, used_reply)``. ``used_reply`` is False on
-        token-missing or token-expired; the caller falls back to Push.
-        """
         entry = self._reply_tokens.pop(chat_id, None)
         if not entry:
             return None, False
@@ -89,37 +90,103 @@ class LineRealAdapter:
             return None, False
         return token, True
 
-    def send_reply(self, line_user_id: str, text: str) -> dict[str, object]:
-        """Send a reply to a LINE user.
+    # ── Bot-info fetch (cached w/ TTL) ───────────────────────────────
+    def get_bot_user_id(self) -> str | None:
+        """Return the channel's own LINE userId, fetched from /v2/bot/info.
 
-        When the real adapter is wired (post-MVP), the call site is
-        expected to:
-
-        1. Run the self-message filter (``line_user_id == self._bot_user_id``).
-        2. Apply outbound transforms: ``strip_markdown(text)`` then
-           ``split_for_line(...)`` — LINE can't render Markdown and
-           caps each bubble at 5 messages × 4500 chars.
-        3. Try Reply via the cached reply-token (free). On
-           missing-or-rejected, fall back to Push (metered).
-
-        The mock records both code paths. The real adapter raises
-        NotImplementedError until httpx wiring ships.
+        Cached for 24h so a re-registered LINE OA eventually refreshes
+        without a process restart. Returns the explicit init-time
+        ``bot_user_id`` if provided (avoids the network call AND the
+        cache entirely).
         """
-        import uuid as _uuid
+        if self._bot_user_id is not None:
+            # Distinguish "set at __init__" from "fetched and cached" —
+            # only the latter obeys the TTL.
+            if self._bot_user_id_fetched_at is None:
+                return self._bot_user_id
+            if time.time() - self._bot_user_id_fetched_at < 24 * 60 * 60:
+                return self._bot_user_id
+            # TTL expired — drop the cache and re-fetch.
+            self._bot_user_id = None
+            self._bot_user_id_fetched_at = None
+        response = self._client.get(
+            f"{self._api_base}/v2/bot/info",
+            headers={"Authorization": f"Bearer {self._token}"},
+        )
+        if response.status_code == 401:
+            raise LineAuthError("invalid access token for /v2/bot/info")
+        if not response.is_success:
+            raise LineAPIError(
+                f"LINE /v2/bot/info failed ({response.status_code}): {response.text}"
+            )
+        data = response.json()
+        self._bot_user_id = data.get("userId")
+        self._bot_user_id_fetched_at = time.time()
+        return self._bot_user_id
 
-        # Self-message filter — would short-circuit when wired.
+    # ── send_reply (the actual wiring) ────────────────────────
+    def send_reply(self, line_user_id: str, text: str) -> dict[str, object]:
+        """Send a reply to a LINE user, with self-message filter + transforms.
+
+        Steps:
+        1. Self-message filter: if line_user_id == bot_user_id → return
+           ``{"skipped": "self-message"}`` without making any HTTP call.
+        2. Apply outbound transforms: strip_markdown + split_for_line.
+        3. Try Reply API first (free) if a cached reply token exists;
+           fall back to Push API (metered) on miss/expire/error.
+        """
+        # 1) Self-message filter
         if self._bot_user_id is not None and line_user_id == self._bot_user_id:
             return {
-                "id": f"reply-{_uuid.uuid4().hex[:12]}",
+                "id": f"reply-{uuid.uuid4().hex[:12]}",
                 "line_user_id": line_user_id,
                 "skipped": "self-message",
             }
 
-        # The line below is the path real wiring will execute. Until then,
-        # raise so callers know the stub is intentional.
-        raise NotImplementedError(
-            "LineRealAdapter.send_reply is not wired in MVP. "
-            "Set use_real_line=false to use mocks. Real wiring will: "
-            "(1) strip_markdown(text), (2) split_for_line(text), "
-            "(3) consume_reply_token(chat_id), (4) Reply if token else Push."
-        )
+        # 2) Outbound transforms
+        clean = strip_markdown(text or "")
+        bubbles = split_for_line(clean)
+        messages = [{"type": "text", "text": b} for b in bubbles]
+
+        # 3) Try Reply (free) if we have a cached token, else Push
+        token, used_reply = self.consume_reply_token(line_user_id)
+        if used_reply:
+            response = self._client.post(
+                f"{self._api_base}/v2/bot/message/reply",
+                headers={
+                    "Authorization": f"Bearer {self._token}",
+                    "Content-Type": "application/json",
+                },
+                json={"replyToken": token, "messages": messages},
+            )
+        else:
+            # Push API requires a target userId (LINE_TO = line_user_id)
+            response = self._client.post(
+                f"{self._api_base}/v2/bot/message/push",
+                headers={
+                    "Authorization": f"Bearer {self._token}",
+                    "Content-Type": "application/json",
+                },
+                json={"to": line_user_id, "messages": messages},
+            )
+
+        if response.status_code == 401:
+            raise LineAuthError("invalid access token for LINE Reply/Push")
+        if response.status_code == 429:
+            raise LineRateLimitError("LINE rate limit hit; retry with backoff")
+        if not response.is_success:
+            raise LineAPIError(
+                f"LINE {('Reply' if used_reply else 'Push')} failed "
+                f"({response.status_code}): {response.text}"
+            )
+
+        return {
+            "id": f"reply-{uuid.uuid4().hex[:12]}",
+            "line_user_id": line_user_id,
+            "via": "reply" if used_reply else "push",
+            "bubbles": len(messages),
+        }
+
+    def close(self) -> None:
+        if self._owns_client:
+            self._client.close()

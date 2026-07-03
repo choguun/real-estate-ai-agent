@@ -25,12 +25,12 @@ references a concrete class by name — only the Protocol.
 
 ## Map
 
-| Adapter         | Protocol               | Mock                                       | Real (stub for MVP)          |
+| Adapter         | Protocol               | Mock                                       | Real (status)                |
 |-----------------|------------------------|--------------------------------------------|-------------------------------|
-| **Supabase DB** | `SupabaseAdapter`      | `MockSupabaseAdapter` (process singleton)  | `RealSupabaseAdapter` (REST)  |
-| **AI**          | `AiAdapter` (fallback chain) | `AnthropicMockAdapter` + `GeminiMockAdapter` | `AnthropicRealAdapter`, `GeminiRealAdapter` |
-| **LINE**        | `LineAdapter`          | `LineMockAdapter` (sign/verify/send_reply) | `LineRealAdapter` (httpx)     |
-| **Storage**     | `StorageAdapter`       | `LocalStorageAdapter` (var/uploads/)       | `SupabaseStorageAdapter`      |
+| **Supabase DB** | `SupabaseAdapter`      | `MockSupabaseAdapter` (process singleton)  | ✅ **Shipped** — PostgREST CRUD via httpx |
+| **AI**          | `AiAdapter` (fallback chain) | `AnthropicMockAdapter` + `GeminiMockAdapter` | ✅ **Shipped (Anthropic)** — Claude 3.5 Sonnet via SDK; Gemini stub |
+| **LINE**        | `LineAdapter`          | `LineMockAdapter` (sign/verify/send_reply) | ✅ **Shipped** — Reply/Push via httpx + bot-info cache + Markdown strip + chunker |
+| **Storage**     | `StorageAdapter`       | `LocalStorageAdapter` (var/uploads/)       | ✅ **Shipped** — Supabase Storage upload + public/signed URL |
 
 ## Switching from mock to real
 
@@ -65,8 +65,9 @@ process is sufficient.
 
 1. **CI has zero API keys**. Mock clients make every test offline.
 2. **Local dev uses zero API keys**. Same code path as test runs.
-3. **The real adapter is a stub now**. When the production rollout happens, only
-   those four files change — `app/routers/*` and tests do not.
+3. **The real adapter is a stub now** ~~stub~~ ✅ **fully wired**. When the
+   production rollout happens, the only change is flipping env flags —
+   `app/routers/*` and tests do not change.
 4. **The fallback chain proves itself in tests**. `tests/test_ai_generator.py`
    injects a `_FailingAdapter` and asserts the secondary runs.
 
