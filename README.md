@@ -23,7 +23,7 @@ uvicorn app.main:app --reload --port 8000
 # Frontend
 cd web && npm install
 cp .env.example .env.local
-npm test                   # vitest — 36 tests
+npm test                   # vitest
 npm run dev                # http://localhost:3000
 ```
 
@@ -68,7 +68,7 @@ Full architectural diagrams and request lifecycles in
 | Database    | Supabase Postgres + Auth + Storage (mocked locally)            |
 | Messaging   | LINE Messaging API + LIFF + webhook HMAC-SHA256 (mocked locally) |
 | AI          | Anthropic Claude 3.5 Sonnet + Google Gemini 2.0 (mocked locally) |
-| Deploy      | Vercel (web) · Railway (backend); runbook + rollout checklist in `docs/runbook.md` |
+| Deploy      | Vercel (web) · Railway (backend); runbooks in `docs/runbook.md` |
 
 ## CI
 
