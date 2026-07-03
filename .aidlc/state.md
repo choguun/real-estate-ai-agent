@@ -1,29 +1,15 @@
 # AIDLC State
 
-- **Phase**: shipped
-- **Branch**: (none — feat/real-adapter-wiring merged + deleted)
-- **PR**: [#3 Cycle 2 — Real adapter wiring](https://github.com/choguun/real-estate-ai-agent/pull/3) MERGED · commit `31fdb70`
-- **Last action**: 2026-07-04T01:15:00Z
-- **Next action**: Start a new AIDLC cycle for the next feature (e.g. multi-tenant teams, RLS, WebSockets)
-- **Notes**:
-  - Cycle 2 (real-adapter-wiring) shipped to `main` via PR #3.
-  - 4 real adapters wired: Supabase DB (PostgREST), LINE (Reply/Push +
-    bot-info cache + Markdown strip + chunker), AI (Anthropic SDK w/
-    Gemini fallback), Storage (Supabase Storage + signed URL).
-  - 5-axis /review posted: 0 P0, 3 P1 (all addressed in `147bb82`),
-    6 P2 (advisory, deferred).
-  - **Final verification (post-merge, on `main`):**
-    - pytest: 230 pass, 10 skipped, 0 failed
-    - coverage: 93.09% (≥ 80% gate) ✅
-    - ruff + ruff-format + mypy strict: clean (53 source files)
-    - AC-RW-08 (router code unchanged) verified by `git diff main..HEAD -- app/routers/` (empty)
-  - To bring up real services in production: follow
-    [`docs/production-deploy.md`](./docs/production-deploy.md) — 8-step
-    walk-through + ~$50/month cost estimate.
-  - AIDLC cycle closed. Next cycle candidates: multi-tenant teams /
-    RLS, WebSockets, image vision (Claude Vision API), auto-posting
-    to DDProperty/Livinginsider/Facebook, payments/billing, audit log
-    UI, Sentry/Otel, i18n beyond Thai+English, mobile app, contracts/
-    e-sign/PDF, Google Calendar two-way sync, CRM analytics.
+- **Phase**: implementing
+- **Branch**: feat/multi-tenant-teams
+- **PR**: (TBD)
+- **Last action**: 2026-07-04T01:30:00Z
+- **Next action**: Run /implement T-301 (schema migration + mock team scoping)
+- **Notes**: Cycle 3 (multi-tenant-teams) approved. spec.md + plan.md committed.
+  8 tasks: T-301 (schema + mock), T-302 (team CRUD), T-303 (member mgmt),
+  T-304 (re-scope existing routers by team_id — L), T-305 (Supabase RLS +
+  live smoke), T-306 (frontend team page), T-307 (invite email + accept),
+  T-308 (test suite update + docs). AC-MT-01..12, ST-MT-01..12.
+  Cycles 1 + 2 merged (PRs #1, #2, #3). Starting T-301.
 
-_Updated: 2026-07-04T01:15:00Z_
+_Updated: 2026-07-04T01:30:00Z_
