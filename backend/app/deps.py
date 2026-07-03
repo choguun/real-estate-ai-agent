@@ -9,6 +9,8 @@ from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, Request, status
 
+from app.adapters.ai._factory import build_ai_chain
+from app.adapters.ai.base import AiAdapter
 from app.adapters.storage._factory import get_storage
 from app.adapters.storage.base import StorageAdapter
 from app.adapters.supabase._factory import get_db
@@ -43,6 +45,14 @@ def get_storage_dep(settings: SettingsDep) -> StorageAdapter:
 
 
 StorageDep = Annotated[StorageAdapter, Depends(get_storage_dep)]
+
+
+def get_ai_chain(settings: SettingsDep) -> list[AiAdapter]:
+    """Per-request AI adapter chain."""
+    return build_ai_chain(settings=settings)
+
+
+AIChainDep = Annotated[list[AiAdapter], Depends(get_ai_chain)]
 
 
 def get_current_user_id(
