@@ -395,3 +395,114 @@ def test_replay_of_same_signed_payload_returns_200_twice(
 
     assert r1.status_code == 200
     assert r2.status_code == 200
+
+
+# ─── Body cap (hermes-agent#23197 takeaway) ─────────────────────────
+def test_oversized_body_rejected_with_413(client: TestClient, mock_line: LineMockAdapter) -> None:
+    """Body cap (1 MiB) defended before any signature work. 413 on oversize."""
+    from app.adapters.line.base import WEBHOOK_BODY_MAX_BYTES
+
+    big = b'{"events":[]}' + b"x" * (WEBHOOK_BODY_MAX_BYTES + 1)
+    sig = mock_line.sign(big)
+    res = client.post(
+        "/webhook/line",
+        content=big,
+        headers={SIGNATURE_HEADER: sig, "Content-Type": "application/json"},
+    )
+    assert res.status_code == 413
+    assert "too large" in res.json()["detail"]
+
+
+def test_body_at_exact_cap_passes_through(client: TestClient, mock_line: LineMockAdapter) -> None:
+    """Boundary case — a body of exactly 1 MiB is the largest accepted."""
+    from app.adapters.line.base import WEBHOOK_BODY_MAX_BYTES
+
+    # 'x' * cap = body that is exactly the cap. (We use a raw byte string
+    # because we're only testing the size gate, not the JSON parser.)
+    body = b"x" * WEBHOOK_BODY_MAX_BYTES
+    sig = mock_line.sign(body)
+    res = client.post(
+        "/webhook/line",
+        content=body,
+        headers={SIGNATURE_HEADER: sig, "Content-Type": "application/json"},
+    )
+    # JSON parse will fail (size gate passes, but body isn't JSON) —
+    # the route must return 400, NOT 413, to prove the cap is `<=`.
+    assert res.status_code == 400
+
+
+# ─── Reply-token caching (C2 fix) ──────────────────────────────────────
+def test_webhook_caches_reply_token_on_inbound_message(
+    auth_client, mock_line: LineMockAdapter
+) -> None:
+    """Inbound ``message`` events with ``replyToken`` populate the
+    adapter's cache. The router calls ``line.set_reply_token(chat_id, …)``
+    before processing, so a later outbound ``send_reply`` to the same
+    chat can use the cached token (free) instead of Push (metered)."""
+    from app.deps import get_line_dep
+
+    c, _user_id = auth_client
+    # Replace the dep so the webhook's ``line`` IS our test mock.
+    c.app.dependency_overrides[get_line_dep] = lambda: mock_line
+    try:
+        body = json.dumps(
+            {
+                "events": [
+                    {
+                        "type": "message",
+                        "event_id": "evt-token-1",
+                        "timestamp": 1700000000000,
+                        "source": {"type": "user", "userId": "U-token-test"},
+                        "replyToken": "tok-cache-1",
+                        "message": {"id": "m-1", "type": "text", "text": "hi"},
+                    }
+                ]
+            }
+        ).encode()
+        sig = mock_line.sign(body)
+        res = c.post(
+            "/webhook/line",
+            content=body,
+            headers={SIGNATURE_HEADER: sig, "Content-Type": "application/json"},
+        )
+        assert res.status_code == 200, res.text
+
+        # Token is now cached under the userId. Subsequent send_reply
+        # will consume it (single-use).
+        assert mock_line.cached_reply_tokens() == {"U-token-test": "tok-cache-1"}
+    finally:
+        c.app.dependency_overrides.clear()
+
+
+def test_webhook_skips_token_cache_for_non_message_events(
+    auth_client, mock_line: LineMockAdapter
+) -> None:
+    """``follow``/``unfollow``/``join``/``leave`` events have no
+    ``replyToken`` — the cache should remain empty."""
+    from app.deps import get_line_dep
+
+    c, _user_id = auth_client
+    c.app.dependency_overrides[get_line_dep] = lambda: mock_line
+    try:
+        body = json.dumps(
+            {
+                "events": [
+                    {
+                        "type": "follow",
+                        "event_id": "evt-follow-1",
+                        "timestamp": 1700000000000,
+                        "source": {"type": "user", "userId": "U-follower"},
+                    }
+                ]
+            }
+        ).encode()
+        sig = mock_line.sign(body)
+        res = c.post(
+            "/webhook/line",
+            content=body,
+            headers={SIGNATURE_HEADER: sig, "Content-Type": "application/json"},
+        )
+        assert res.status_code == 200
+        assert mock_line.cached_reply_tokens() == {}
+    finally:
+        c.app.dependency_overrides.clear()
