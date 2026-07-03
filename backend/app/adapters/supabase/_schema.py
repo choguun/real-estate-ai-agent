@@ -1,7 +1,7 @@
-"""Canonical schema — Python mirror of `migrations/001_init.sql`.
+"""Canonical schema — Python mirror of `migrations/*.sql`.
 
 This is the **source of truth** for the mock Supabase adapter. The SQL
-file is kept in sync as documentation for the real Postgres schema. A
+files are kept in sync as documentation for the real Postgres schema. A
 test asserts both files declare the same tables.
 
 Default-value semantics:
@@ -53,6 +53,10 @@ def _role_agent() -> str:
     return "agent"
 
 
+def _role_owner() -> str:
+    return "owner"
+
+
 def _status_draft() -> str:
     return "draft"
 
@@ -86,6 +90,7 @@ class Column:
 class Table:
     name: str
     columns: tuple[Column, ...]
+    unique_constraints: tuple[tuple[str, ...], ...] = ()
     _by_name: dict[str, Column] = field(default_factory=dict, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -127,7 +132,7 @@ def _col(name: str, type_: str, *, nullable: bool = True, default: Any = None) -
 _MISSING: Any = object()
 
 
-# ─── Tables (mirror migrations/001_init.sql) ───────────────────────────
+# ─── Tables (mirror migrations/*.sql) ─────────────────────────────────
 USERS = Table(
     "users",
     (
@@ -155,7 +160,41 @@ TEAMS = Table(
         _col("plan", "TEXT", default=lambda: "starter"),
         _col("created_at", "TIMESTAMPTZ", default=_now),
         _col("updated_at", "TIMESTAMPTZ", default=_now),
+        _col("deleted_at", "TIMESTAMPTZ"),
     ),
+)
+
+# 002_teams.sql: team_memberships join table (NEW for cycle 3)
+TEAM_MEMBERSHIPS = Table(
+    "team_memberships",
+    (
+        _col("id", "UUID", nullable=False, default=_uuid),
+        _col("team_id", "UUID", nullable=False),
+        _col("user_id", "UUID", nullable=False),
+        _col("role", "TEXT", nullable=False, default=_role_agent),
+        _col("joined_at", "TIMESTAMPTZ", default=_now),
+        _col("left_at", "TIMESTAMPTZ"),
+        _col("removed_by", "UUID"),
+    ),
+    unique_constraints=(("team_id", "user_id"),),
+)
+
+# 002_teams.sql: team_invitations (NEW for cycle 3)
+TEAM_INVITATIONS = Table(
+    "team_invitations",
+    (
+        _col("id", "UUID", nullable=False, default=_uuid),
+        _col("team_id", "UUID", nullable=False),
+        _col("email", "TEXT", nullable=False),
+        _col("role", "TEXT", nullable=False, default=_role_agent),
+        _col("token", "TEXT", nullable=False),
+        _col("invited_by", "UUID", nullable=False),
+        _col("invited_at", "TIMESTAMPTZ", default=_now),
+        _col("expires_at", "TIMESTAMPTZ", nullable=False),
+        _col("accepted_at", "TIMESTAMPTZ"),
+        _col("accepted_by", "UUID"),
+    ),
+    unique_constraints=(("token",),),
 )
 
 PROPERTIES = Table(
@@ -227,6 +266,7 @@ APPOINTMENTS = Table(
     (
         _col("id", "UUID", nullable=False, default=_uuid),
         _col("user_id", "UUID", nullable=False),
+        _col("team_id", "UUID"),
         _col("lead_id", "UUID"),
         _col("property_id", "UUID"),
         _col("scheduled_at", "TIMESTAMPTZ", nullable=False),
@@ -245,6 +285,7 @@ GENERATED_LISTINGS = Table(
         _col("id", "UUID", nullable=False, default=_uuid),
         _col("property_id", "UUID", nullable=False),
         _col("user_id", "UUID", nullable=False),
+        _col("team_id", "UUID"),
         _col("platform", "TEXT"),
         _col("title", "TEXT"),
         _col("description", "TEXT"),
@@ -263,6 +304,7 @@ CONTRACTS = Table(
     (
         _col("id", "UUID", nullable=False, default=_uuid),
         _col("user_id", "UUID", nullable=False),
+        _col("team_id", "UUID"),
         _col("property_id", "UUID"),
         _col("lead_id", "UUID"),
         _col("contract_type", "TEXT"),
@@ -306,6 +348,8 @@ DEFAULT_SCHEMA = Schema(
     (
         USERS,
         TEAMS,
+        TEAM_MEMBERSHIPS,  # NEW (cycle 3)
+        TEAM_INVITATIONS,  # NEW (cycle 3)
         PROPERTIES,
         LEADS,
         MESSAGES,

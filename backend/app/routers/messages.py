@@ -1,4 +1,7 @@
-"""Agent → lead outbound messages + LINE delivery."""
+"""Agent → lead outbound messages + LINE delivery.
+
+T-304: scoped by `team_id` (the caller's current team).
+"""
 
 from __future__ import annotations
 
@@ -8,7 +11,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.adapters.supabase.base import SupabaseAdapter
-from app.deps import CurrentUserIdDep, DBDep, LineDep
+from app.deps import CurrentTeamIdDep, CurrentUserIdDep, DBDep, LineDep
 
 router = APIRouter(tags=["messages"])
 
@@ -25,16 +28,17 @@ def send_reply(
     payload: ReplyIn,
     db: DBDep,
     user_id: CurrentUserIdDep,
+    team_id: CurrentTeamIdDep,
     line: LineDep,
 ) -> dict[str, object]:
     """Send an outbound text reply to a lead.
 
-    The lead must have a `line_user_id` (manual outbound to non-LINE leads
-    is out of scope for MVP). Inserted as `direction='outbound'`,
-    `is_ai_generated=False`, then handed to the LINE adapter.
+    The lead must belong to the caller's team. Inserted as
+    `direction='outbound'`, `is_ai_generated=False`, then handed to the
+    LINE adapter.
     """
     lead: dict[str, object] | None = db.get_by_id("leads", lead_id)
-    if lead is None or lead.get("user_id") != user_id:
+    if lead is None or lead.get("team_id") != team_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Lead not found")
 
     line_user_id = lead.get("line_user_id")
@@ -46,7 +50,7 @@ def send_reply(
 
     adapter_response = line.send_reply(line_user_id, payload.text)
 
-    msg = _send_message(db, user_id=user_id, lead_id=lead_id, content=payload.text)
+    msg = _send_message(db, user_id=user_id, team_id=team_id, lead_id=lead_id, content=payload.text)
 
     db.update(
         "leads",
@@ -64,6 +68,7 @@ def _send_message(
     db: SupabaseAdapter,
     *,
     user_id: str,
+    team_id: str,
     lead_id: str,
     content: str,
 ) -> dict[str, object]:
@@ -71,6 +76,7 @@ def _send_message(
         "messages",
         {
             "user_id": user_id,
+            "team_id": team_id,
             "lead_id": lead_id,
             "direction": "outbound",
             "message_type": "text",

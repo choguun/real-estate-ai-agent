@@ -111,10 +111,27 @@ class LeadPipeline:
             lead = existing[0]
             new_lead = False
         else:
+            # T-304: leads are team-scoped. The agent's team is resolved
+            # from their user_id; if they have no team yet (e.g. webhook
+            # hit before any router was called), auto-create a personal
+            # team so the lead is properly attributed.
+            from app.services.team_service import create_team
+
+            user = self._db.get_by_id("users", agent_id)
+            if user is None or not user.get("team_id"):
+                personal = create_team(
+                    self._db,
+                    name=f"Personal {str(agent_id)[:8]}",
+                    owner_id=agent_id,  # type: ignore[arg-type]
+                )
+                team_id = str(personal["id"])
+            else:
+                team_id = user["team_id"]
             lead = self._db.insert(
                 "leads",
                 {
                     "user_id": agent_id,
+                    "team_id": team_id,
                     "line_user_id": line_user_id,
                     "source": "line",
                 },
@@ -130,6 +147,7 @@ class LeadPipeline:
             "messages",
             {
                 "user_id": agent_id,
+                "team_id": lead.get("team_id"),
                 "lead_id": lead["id"],
                 "direction": "inbound",
                 "message_type": msg_type,

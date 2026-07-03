@@ -25,6 +25,7 @@ from app.routers.listings import router as listings_router
 from app.routers.messages import router as messages_router
 from app.routers.properties import router as properties_router
 from app.routers.storage import router as storage_router
+from app.routers.teams import router as teams_router
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(leads_router)
     app.include_router(messages_router)
     app.include_router(dashboard_router)
+    app.include_router(teams_router)
     return app
 
 
