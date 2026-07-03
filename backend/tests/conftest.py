@@ -16,6 +16,7 @@ def _reset_all_caches() -> None:
     """Clear adapter singletons so each test starts with a clean slate."""
     reset_mock_singleton()
     import contextlib
+
     with contextlib.suppress(Exception):
         reset_email_cache()
 
