@@ -11,6 +11,8 @@ from fastapi import Depends, Header, HTTPException, Request, status
 
 from app.adapters.ai._factory import build_ai_chain
 from app.adapters.ai.base import AiAdapter
+from app.adapters.line._factory import get_line_adapter
+from app.adapters.line.base import LineAdapter
 from app.adapters.storage._factory import get_storage
 from app.adapters.storage.base import StorageAdapter
 from app.adapters.supabase._factory import get_db
@@ -53,6 +55,14 @@ def get_ai_chain(settings: SettingsDep) -> list[AiAdapter]:
 
 
 AIChainDep = Annotated[list[AiAdapter], Depends(get_ai_chain)]
+
+
+def get_line_dep(settings: SettingsDep) -> LineAdapter:
+    """Per-request LINE adapter (mock unless use_real_line=true)."""
+    return get_line_adapter(settings=settings)
+
+
+LineDep = Annotated[LineAdapter, Depends(get_line_dep)]
 
 
 def get_current_user_id(

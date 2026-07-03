@@ -360,12 +360,12 @@ def test_no_db_writes_on_unverified_request(
 @pytest.fixture(autouse=True)
 def _isolate():
     from app.adapters.supabase._factory import reset_mock_singleton
+
     reset_mock_singleton()
     yield
     reset_mock_singleton()
 
-
-# ─── Helper coverage ───────────────────────────────────────────────────
+    # ─── Helper coverage ───────────────────────────────────────────────────
 
     sig = sign_line_webhook(LINE_BODY, SECRET)
     assert verify_line_webhook(LINE_BODY, sig, SECRET) is True
