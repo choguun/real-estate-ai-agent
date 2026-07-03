@@ -27,7 +27,7 @@ from app.adapters.storage.base import (
     ALLOWED_IMAGE_TYPES,
     StoredObject,
 )
-from app.adapters.storage.errors import StorageUploadError
+from app.adapters.storage.errors import StorageDownloadError, StorageUploadError
 
 _MAX_BYTES = 10 * 1024 * 1024  # 10 MiB
 _SAFE_KEY = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -140,6 +140,11 @@ class SupabaseStorageAdapter:
         )
         if response.status_code == 404:
             return None
+        # 5xx → raise typed error so router can return 502/503 instead of 404
+        if 500 <= response.status_code < 600:
+            raise StorageDownloadError(
+                f"Supabase Storage get failed ({response.status_code}): {response.text[:200]}"
+            )
         if not response.is_success:
             return None
         ct = response.headers.get("content-type") or "application/octet-stream"

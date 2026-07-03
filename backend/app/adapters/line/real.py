@@ -90,17 +90,25 @@ class LineRealAdapter(LineAdapter):
             return None, False
         return token, True
 
-    # ── Bot-info fetch (cached) ───────────────────────────────
+    # ── Bot-info fetch (cached w/ TTL) ───────────────────────────────
     def get_bot_user_id(self) -> str | None:
         """Return the channel's own LINE userId, fetched from /v2/bot/info.
 
-        Cached after the first successful fetch. Returns the explicit
-        init-time ``bot_user_id`` if provided (avoids the network call).
+        Cached for 24h so a re-registered LINE OA eventually refreshes
+        without a process restart. Returns the explicit init-time
+        ``bot_user_id`` if provided (avoids the network call AND the
+        cache entirely).
         """
         if self._bot_user_id is not None:
-            return self._bot_user_id
-        if self._bot_user_id_fetched_at is not None:
-            return self._bot_user_id
+            # Distinguish "set at __init__" from "fetched and cached" —
+            # only the latter obeys the TTL.
+            if self._bot_user_id_fetched_at is None:
+                return self._bot_user_id
+            if time.time() - self._bot_user_id_fetched_at < 24 * 60 * 60:
+                return self._bot_user_id
+            # TTL expired — drop the cache and re-fetch.
+            self._bot_user_id = None
+            self._bot_user_id_fetched_at = None
         response = self._client.get(
             f"{self._api_base}/v2/bot/info",
             headers={"Authorization": f"Bearer {self._token}"},

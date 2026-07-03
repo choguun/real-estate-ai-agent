@@ -204,3 +204,51 @@ def test_get_bot_user_id_uses_init_value_without_network() -> None:
     )
     assert adapter.get_bot_user_id() == "U-preconfigured"
     assert len(captured) == 0
+
+
+# ── bot_user_id cache TTL (P1-W3) ────────────────────────────
+
+
+def test_get_bot_user_id_re_fetches_after_ttl_expires(monkeypatch) -> None:
+    """P1-W3: cache must expire so a re-registered LINE OA eventually refreshes."""
+    import time
+
+    handle, captured = _make_handler(
+        [
+            (200, {"userId": "U-bot-v1", "displayName": "Bot v1"}),
+            (200, {"userId": "U-bot-v2", "displayName": "Bot v2"}),
+        ]
+    )
+    adapter = LineRealAdapter(
+        channel_secret=CHANNEL_SECRET,
+        channel_access_token=CHANNEL_TOKEN,
+        api_base=API_BASE,
+        transport=httpx.MockTransport(handle),
+    )
+    # First call → fetch v1
+    assert adapter.get_bot_user_id() == "U-bot-v1"
+    assert len(captured) == 1
+    # Advance fake time past 24h TTL
+    real_time = time.time
+    base = real_time()
+    monkeypatch.setattr(time, "time", lambda: base + 25 * 60 * 60)
+    # Second call after TTL → re-fetch (v2)
+    assert adapter.get_bot_user_id() == "U-bot-v2"
+    assert len(captured) == 2
+    # Restore
+    monkeypatch.setattr(time, "time", real_time)
+
+
+def test_get_bot_user_id_caches_within_ttl() -> None:
+    """Within TTL window, the cache short-circuits the second call."""
+    handle, captured = _make_handler([(200, {"userId": "U-bot-stale", "displayName": "Bot"})])
+    adapter = LineRealAdapter(
+        channel_secret=CHANNEL_SECRET,
+        channel_access_token=CHANNEL_TOKEN,
+        api_base=API_BASE,
+        transport=httpx.MockTransport(handle),
+    )
+    # Two calls within TTL → only one network request
+    assert adapter.get_bot_user_id() == "U-bot-stale"
+    assert adapter.get_bot_user_id() == "U-bot-stale"
+    assert len(captured) == 1

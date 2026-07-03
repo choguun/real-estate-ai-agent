@@ -212,3 +212,16 @@ def test_delete_returns_false_on_404() -> None:
     handle, _ = _capture_handler([(404, "Not Found")])
     adapter = _adapter(handle)
     assert adapter.delete("missing.png") is False
+
+
+# ── 5xx → typed error (P1-W2) ───────────────────────────────
+
+
+def test_get_5xx_raises_storage_download_error() -> None:
+    """P1-W2: 5xx must raise typed error (not silently None)."""
+    from app.adapters.storage.errors import StorageDownloadError
+
+    handle, _ = _capture_handler([(503, "Service Unavailable")])
+    adapter = _adapter(handle)
+    with pytest.raises(StorageDownloadError, match="503"):
+        adapter.get("cover.png")

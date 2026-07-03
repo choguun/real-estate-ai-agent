@@ -365,3 +365,34 @@ def test_403_raises_permission_error() -> None:
     )
     with pytest.raises(PermissionError):
         adapter.get_by_id("users", _new_id())
+
+
+# ── safe_json (P1-W1: typed error on malformed body) ──────────
+
+
+def test_malformed_json_body_raises_runtime_error() -> None:
+    """P1-W1: if Supabase returns HTML/proxy error page, raise typed error."""
+    handle, _ = _capturing_handler([(200, "<html>Bad Gateway</html>")])
+    adapter = RealSupabaseAdapter(
+        base_url=SUPABASE_URL,
+        api_key=ANON_KEY,
+        service_role_key=SERVICE_KEY,
+        transport=httpx.MockTransport(handle),
+    )
+    with pytest.raises(RuntimeError, match="non-JSON"):
+        adapter.query("users", filters={"email": "x@x.com"})
+
+
+def test_single_dict_payload_is_coerced_to_list() -> None:
+    """PostgREST with Prefer: return=single may return a dict — coerce."""
+    user_id = _new_id()
+    handle, _ = _capturing_handler([(200, {"id": user_id, "email": "a@b.com"})])
+    adapter = RealSupabaseAdapter(
+        base_url=SUPABASE_URL,
+        api_key=ANON_KEY,
+        service_role_key=SERVICE_KEY,
+        transport=httpx.MockTransport(handle),
+    )
+    rows = adapter.query("users", filters={"id": user_id})
+    assert isinstance(rows, list)
+    assert rows[0]["id"] == user_id

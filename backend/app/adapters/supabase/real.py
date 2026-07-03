@@ -18,6 +18,7 @@ method via httpx.MockTransport — no network in CI.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping
 from typing import Any, cast
@@ -30,6 +31,31 @@ from app.adapters.supabase.errors import PermissionError
 
 _SAFE_COLUMN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SAFE_ORDER = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
+
+
+def _safe_json(response: httpx.Response, *, table: str, op: str) -> list[dict[str, Any]]:
+    """Decode response body as JSON list-of-dicts; raise typed error on failure.
+
+    Bypasses raw ``response.json()`` so a malformed body (e.g. an HTML
+    error page from a proxy in front of PostgREST) raises a typed
+    error instead of escaping as a generic ``json.JSONDecodeError``.
+    """
+    try:
+        payload = response.json()
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Supabase {op} on {table!r} returned non-JSON "
+            f"(status={response.status_code}): {response.text[:200]!r}"
+        ) from exc
+    if isinstance(payload, dict):
+        # PostgREST with Prefer: return=single returns a dict, not a list.
+        return [payload]
+    if not isinstance(payload, list):
+        raise RuntimeError(
+            f"Supabase {op} on {table!r} returned non-list payload "
+            f"(status={response.status_code})"
+        )
+    return payload
 
 
 class RealSupabaseAdapter(SupabaseAdapter):
@@ -122,8 +148,7 @@ class RealSupabaseAdapter(SupabaseAdapter):
         self._check_status(response)
         if response.status_code == 204 or not response.content:
             return []
-        rows: list[dict[str, Any]] = response.json()
-        return rows
+        return _safe_json(response, table=table, op="query")
 
     def count(
         self,
@@ -155,7 +180,7 @@ class RealSupabaseAdapter(SupabaseAdapter):
         # fall back to counting the returned body.
         if response.status_code == 204 or not response.content:
             return 0
-        body: list[dict[str, Any]] = response.json()
+        body = _safe_json(response, table=table, op="count")
         return len(body)
 
     def insert(self, table: str, data: Mapping[str, Any]) -> dict[str, Any]:
@@ -166,7 +191,7 @@ class RealSupabaseAdapter(SupabaseAdapter):
         )
         self._check_status(response)
         # PostgREST returns the inserted row(s) with Prefer: return=representation
-        rows: list[dict[str, Any]] = response.json() if response.content else []
+        rows = _safe_json(response, table=table, op="insert")
         if not rows:
             raise RuntimeError(
                 f"Supabase insert returned no row for {table!r} " f"(status={response.status_code})"
@@ -188,7 +213,7 @@ class RealSupabaseAdapter(SupabaseAdapter):
         self._check_status(response)
         if response.status_code == 204 or not response.content:
             return None
-        rows: list[dict[str, Any]] = response.json()
+        rows = _safe_json(response, table=table, op="update")
         return rows[0] if rows else None
 
     def delete(self, table: str, id: str) -> bool:
