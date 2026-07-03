@@ -91,10 +91,10 @@ npm run test:e2e                               # playwright e2e (after T-012)
 
 ```bash
 # Frontend → Vercel
-vercel --prod
+vercel --prod                                  # uses web/vercel.json
 
 # Backend → Railway
-railway up                                     # uses backend/pyproject.toml + env
+railway up                                     # uses backend/railway.toml
 railway variables set USE_MOCKS=false SUPABASE_URL=…  # flip to real
 ```
 
@@ -122,7 +122,7 @@ real-estate-ai-agent/                          # repo root
 │
 ├── web/                          # Next.js 15 frontend (App Router)
 │   ├── app/
-│   │   ├── page.tsx                                # landing (root)
+│   │   ├── (marketing)/page.tsx                       # landing
 │   │   ├── (auth)/login/page.tsx
 │   │   ├── (auth)/signup/page.tsx
 │   │   ├── (app)/dashboard/page.tsx
@@ -213,7 +213,8 @@ real-estate-ai-agent/                          # repo root
     ├── pyproject.toml             # ruff + mypy + pytest config
     ├── requirements.txt
     ├── .env.example
-    └── (Dockerfile + railway.toml deferred to deploy phase)
+    ├── Dockerfile                 # for Railway
+    └── railway.toml
 ```
 
 ### Why this structure
@@ -259,7 +260,7 @@ def health() -> dict[str, str]:
 - Pydantic v2 models for every DTO. Use `model_config = ConfigDict(extra="forbid")`.
 - Logging: `get_logger(__name__)`, never `print()`.
 - Errors: raise domain exceptions, map to HTTP in a single handler
-  (`app/routers/<name>.py::_map_*_error` helpers; per-router).
+  (`app/main.py::register_exception_handlers`).
 - Lint/format/typecheck: ruff + ruff-format + mypy strict.
 
 **DO NOT** — common pitfalls:
