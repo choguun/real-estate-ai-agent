@@ -116,7 +116,7 @@ def invite_member(
     ):
         raise HTTPException(status_code=409, detail="user is already a team member")
 
-    from app.services.plan_limits import assert_can_invite, PlanLimitExceeded
+    from app.services.plan_limits import PlanLimitExceeded, assert_can_invite
 
     try:
         assert_can_invite(supabase, team_id=team_id)
@@ -124,7 +124,7 @@ def invite_member(
         raise HTTPException(
             status_code=403,
             detail=f"plan limit exceeded ({exc.code}): {exc.used}/{exc.limit}",
-        )
+        ) from exc
 
     token = generate_invite_token()
     invitation = supabase.insert(
