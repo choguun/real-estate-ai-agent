@@ -66,8 +66,8 @@ def _fb_fallback(p: PropertySummary, req: ListingRequest) -> GeneratedContent:
             📦 {t}
             📍 {_loc(p)}
             💸 ฿{_money(p.price)}
-            📐 {p.size_sqm or '—'} ตร.ม.
-            🛏 {p.bedrooms or '—'} / 🚿 {p.bathrooms or '—'}
+            📐 {p.size_sqm or "—"} ตร.ม.
+            🛏 {p.bedrooms or "—"} / 🚿 {p.bathrooms or "—"}
             """
         ).strip(),
         hashtags=["#fallback", "#gemini", "#listing", "#ขาย", "#Bangkok", "#อสังหา"],

@@ -31,7 +31,7 @@ def test_invite_email_is_sent_to_invitee() -> None:
 
     client = _client()
     token = _signup(client, "owner-inv@example.com")
-    client.post("/api/teams", json={"name": "Invite Test"}, headers=_auth(token))
+    client.post("/api/teams", json={"name": "Invite Test", "plan": "growth"}, headers=_auth(token))
 
     # Create a fresh email adapter (with empty sent list) to inspect
     email_svc = build_email_adapter(get_settings())
@@ -54,7 +54,9 @@ def test_invite_email_is_sent_to_invitee() -> None:
         ).json()["token"]
         c.headers["Authorization"] = f"Bearer {tok}"
         t = c.post(
-            "/api/teams", json={"name": "Invite Test"}, headers={"Authorization": f"Bearer {tok}"}
+            "/api/teams",
+            json={"name": "Invite Test", "plan": "growth"},
+            headers={"Authorization": f"Bearer {tok}"},
         ).json()
         r = c.post(
             f"/api/teams/{t['id']}/invitations",
@@ -71,7 +73,9 @@ def test_invite_token_is_high_entropy() -> None:
 
     client = _client()
     token = _signup(client, "owner-tok@example.com")
-    team = client.post("/api/teams", json={"name": "TokTest"}, headers=_auth(token)).json()
+    team = client.post(
+        "/api/teams", json={"name": "TokTest", "plan": "growth"}, headers=_auth(token)
+    ).json()
     response = client.post(
         f"/api/teams/{team['id']}/invitations",
         json={"email": "x@x.com"},
@@ -87,7 +91,9 @@ def test_accept_invite_creates_user_and_returns_jwt() -> None:
     """ST-MT-09: accept flow creates a new user + adds to team + returns JWT."""
     client = _client()
     owner_token = _signup(client, "owner-acc@example.com")
-    team = client.post("/api/teams", json={"name": "AcceptTest"}, headers=_auth(owner_token)).json()
+    team = client.post(
+        "/api/teams", json={"name": "AcceptTest", "plan": "growth"}, headers=_auth(owner_token)
+    ).json()
 
     # Owner invites
     invite = client.post(
@@ -121,7 +127,9 @@ def test_accept_invite_reuses_existing_user() -> None:
     client = _client()
     owner_token = _signup(client, "owner-reuse@example.com")
     _signup(client, "existing@example.com")  # pre-create user
-    team = client.post("/api/teams", json={"name": "Reuse"}, headers=_auth(owner_token)).json()
+    team = client.post(
+        "/api/teams", json={"name": "Reuse", "plan": "growth"}, headers=_auth(owner_token)
+    ).json()
 
     invite = client.post(
         f"/api/teams/{team['id']}/invitations",
@@ -146,7 +154,9 @@ def test_accept_invite_rejects_double_use() -> None:
     """ST-MT-09: 410 Gone on second accept."""
     client = _client()
     owner_token = _signup(client, "owner-double@example.com")
-    team = client.post("/api/teams", json={"name": "Double"}, headers=_auth(owner_token)).json()
+    team = client.post(
+        "/api/teams", json={"name": "Double", "plan": "growth"}, headers=_auth(owner_token)
+    ).json()
     invite = client.post(
         f"/api/teams/{team['id']}/invitations",
         json={"email": "x2@x.com", "role": "agent"},
@@ -171,7 +181,9 @@ def test_accept_invite_for_liff_user_sets_password() -> None:
 
     client = _client()
     owner_token = _signup(client, "owner-liff-acc@example.com")
-    team = client.post("/api/teams", json={"name": "LiffAcc"}, headers=_auth(owner_token)).json()
+    team = client.post(
+        "/api/teams", json={"name": "LiffAcc", "plan": "growth"}, headers=_auth(owner_token)
+    ).json()
 
     # Create a LIFF user (no password)
     db = get_db(get_settings())

@@ -45,7 +45,8 @@ def create_team_endpoint(
     supabase: DBDep,
 ) -> TeamOut:
     """ST-MT-01: create a team + set caller as owner."""
-    team = create_team(supabase, name=payload.name, owner_id=UUID(user_id))
+    plan = payload.model_dump().get("plan") or "starter"
+    team = create_team(supabase, name=payload.name, owner_id=UUID(user_id), plan=plan)
     return TeamOut.model_validate(team)
 
 
@@ -114,6 +115,16 @@ def invite_member(
         team_id=team_id,
     ):
         raise HTTPException(status_code=409, detail="user is already a team member")
+
+    from app.services.plan_limits import assert_can_invite, PlanLimitExceeded
+
+    try:
+        assert_can_invite(supabase, team_id=team_id)
+    except PlanLimitExceeded as exc:
+        raise HTTPException(
+            status_code=403,
+            detail=f"plan limit exceeded ({exc.code}): {exc.used}/{exc.limit}",
+        )
 
     token = generate_invite_token()
     invitation = supabase.insert(

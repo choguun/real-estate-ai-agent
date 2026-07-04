@@ -14,20 +14,20 @@ class StripeBillingAdapter:
 
     def create_checkout_session(self, **kw: Any) -> Any:
         raise NotImplementedError(
-            "StripeBillingAdapter wired in T-405. " "Set use_mocks=true (default) for local dev."
+            "StripeBillingAdapter wired in T-405. Set use_mocks=true (default) for local dev."
         )
 
     def create_portal_session(self, **kw: Any) -> Any:
         raise NotImplementedError(
-            "StripeBillingAdapter wired in T-405. " "Set use_mocks=true (default) for local dev."
+            "StripeBillingAdapter wired in T-405. Set use_mocks=true (default) for local dev."
         )
 
     def get_subscription(self, **kw: Any) -> Any:
         raise NotImplementedError(
-            "StripeBillingAdapter wired in T-405. " "Set use_mocks=true (default) for local dev."
+            "StripeBillingAdapter wired in T-405. Set use_mocks=true (default) for local dev."
         )
 
     def verify_webhook_signature(self, **kw: Any) -> Any:
         raise NotImplementedError(
-            "StripeBillingAdapter wired in T-405. " "Set use_mocks=true (default) for local dev."
+            "StripeBillingAdapter wired in T-405. Set use_mocks=true (default) for local dev."
         )

@@ -105,7 +105,9 @@ def test_list_members_requires_membership() -> None:
 def test_invite_member_returns_token() -> None:
     client = _client()
     token = _signup(client, "owner3@example.com")
-    team = client.post("/api/teams", json={"name": "Inviters"}, headers=_auth(token)).json()
+    team = client.post(
+        "/api/teams", json={"name": "Inviters", "plan": "growth"}, headers=_auth(token)
+    ).json()
     response = client.post(
         f"/api/teams/{team['id']}/invitations",
         json={"email": "alice@example.com", "role": "agent"},
@@ -123,7 +125,9 @@ def test_invite_token_is_high_entropy() -> None:
     """Token must be secure — at least 32 bytes of entropy."""
     client = _client()
     token = _signup(client, "owner4@example.com")
-    team = client.post("/api/teams", json={"name": "Secure"}, headers=_auth(token)).json()
+    team = client.post(
+        "/api/teams", json={"name": "Secure", "plan": "growth"}, headers=_auth(token)
+    ).json()
     response = client.post(
         f"/api/teams/{team['id']}/invitations",
         json={"email": "x@x.com"},
@@ -140,7 +144,9 @@ def test_invite_only_owner_can_invite() -> None:
     """Non-owners get 403 even if they are team members."""
     client = _client()
     owner_token = _signup(client, "owner5@example.com")
-    team = client.post("/api/teams", json={"name": "Strict"}, headers=_auth(owner_token)).json()
+    team = client.post(
+        "/api/teams", json={"name": "Strict", "plan": "growth"}, headers=_auth(owner_token)
+    ).json()
     team_id = team["id"]
     # Invite an agent
     client.post(

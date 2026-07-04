@@ -52,8 +52,7 @@ def _safe_json(response: httpx.Response, *, table: str, op: str) -> list[dict[st
         return [payload]
     if not isinstance(payload, list):
         raise RuntimeError(
-            f"Supabase {op} on {table!r} returned non-list payload "
-            f"(status={response.status_code})"
+            f"Supabase {op} on {table!r} returned non-list payload (status={response.status_code})"
         )
     return payload
 
@@ -194,7 +193,7 @@ class RealSupabaseAdapter(SupabaseAdapter):
         rows = _safe_json(response, table=table, op="insert")
         if not rows:
             raise RuntimeError(
-                f"Supabase insert returned no row for {table!r} " f"(status={response.status_code})"
+                f"Supabase insert returned no row for {table!r} (status={response.status_code})"
             )
         return rows[0]
 
