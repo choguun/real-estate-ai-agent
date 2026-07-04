@@ -1,10 +1,10 @@
 # AIDLC State
 
-- **Phase**: implementing
+- **Phase**: reviewing
 - **Branch**: feat/rate-limiting
-- **PR**: (TBD)
-- **Last action**: 2026-07-04T11:30:00Z
-- **Next action**: Run /aidlc review + /ship to land cycle 6 + fold cycle 5
+- **PR**: #6 (5-axis review posted, awaiting ship)
+- **Last action**: 2026-07-04T12:00:00Z
+- **Next action**: Run /ship to merge PR #6
 - **Notes**:
   - 🎉 **Cycle 5 (security hardening: JWT/CORS defaults, audit log,
     RLS gaps) on feat/security-hardening — T-501..T-504 done; T-505
