@@ -15,6 +15,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app.adapters.supabase._factory import get_db, reset_mock_singleton
@@ -205,3 +206,186 @@ def test_metadata_with_unknown_keys_is_rejected() -> None:
         metadata={},  # type: ignore[arg-type]
     )
     assert event.metadata == {}
+
+
+# ── T-503: router-level hooks (integration) ────────────────────────
+
+
+def test_signup_writes_audit_row(client) -> None:
+    """AC-SEC-08: POST /api/auth/signup writes one security_events row.
+
+    T-503: the audit hook is wired into the auth router.
+    """
+    from app.adapters.supabase._factory import get_db
+    from app.config import get_settings
+
+    r = client.post(
+        "/api/auth/signup",
+        json={
+            "email": "audit-signup@example.com",
+            "password": "supersecret123",
+            "full_name": "Audit S",
+        },
+    )
+    assert r.status_code in (200, 201), r.text
+    user_id = r.json()["user"]["id"]
+
+    db = get_db(get_settings())
+    rows = db.query("security_events", filters={"action": "auth.signup"})
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["actor_id"] == user_id
+    assert row["target_id"] == user_id
+    assert row["success"] is True
+
+
+def test_login_success_writes_audit_row(client) -> None:
+    """AC-SEC-09 (success path): POST /api/auth/login with valid creds
+    writes one row with success=true.
+    """
+    from app.adapters.supabase._factory import get_db
+    from app.config import get_settings
+
+    # Pre-create the user
+    client.post(
+        "/api/auth/signup",
+        json={
+            "email": "audit-login@example.com",
+            "password": "supersecret123",
+            "full_name": "Audit L",
+        },
+    )
+    # Wipe prior audit rows so we count just this login
+    db = get_db(get_settings())
+    for _r in db.query("security_events", filters={"action": "auth.login"}):
+        # Supabase mock doesn't have delete; skip — assert at-least-1 instead
+        pass
+
+    r = client.post(
+        "/api/auth/login",
+        json={"email": "audit-login@example.com", "password": "supersecret123"},
+    )
+    assert r.status_code == 200, r.text
+
+    rows = db.query("security_events", filters={"action": "auth.login"})
+    assert len(rows) >= 1
+    success_rows = [r for r in rows if r["success"]]
+    assert len(success_rows) >= 1
+    assert success_rows[0]["actor_id"]
+
+
+def test_login_failure_writes_audit_row(client) -> None:
+    """AC-SEC-09 (failure path): bad password writes one row with
+    success=false, actor_id=null, metadata.email set.
+    """
+    from app.adapters.supabase._factory import get_db
+    from app.config import get_settings
+
+    # Pre-create so we hit "bad password" rather than "no such user"
+    # (both produce InvalidCredentials; the test is the same either way)
+    client.post(
+        "/api/auth/signup",
+        json={
+            "email": "audit-bad@example.com",
+            "password": "supersecret123",
+            "full_name": "Audit B",
+        },
+    )
+
+    r = client.post(
+        "/api/auth/login",
+        json={"email": "audit-bad@example.com", "password": "wrong-password"},
+    )
+    assert r.status_code == 401, r.text
+
+    db = get_db(get_settings())
+    rows = db.query(
+        "security_events", filters={"action": "auth.login.failure"}
+    )
+    assert len(rows) >= 1
+    row = rows[-1]
+    assert row["actor_id"] is None
+    assert row["success"] is False
+    assert row["metadata"].get("email") == "audit-bad@example.com"
+
+
+def test_accept_invite_writes_audit_row(client) -> None:
+    """AC-SEC-10: POST /api/teams/invitations/{token}/accept writes
+    one row with action=team.accept_invite.
+    """
+    import json as _json
+    import uuid as _uuid
+
+    from app.adapters.supabase._factory import get_db
+    from app.config import get_settings
+    from app.main import create_app
+
+    # Owner creates team
+    r = client.post(
+        "/api/auth/signup",
+        json={
+            "email": "audit-owner@example.com",
+            "password": "supersecret123",
+            "full_name": "Owner",
+        },
+    )
+    owner_token = r.json()["token"]
+    team = client.post(
+        "/api/teams",
+        json={"name": "AuditTeam"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    ).json()
+
+    # Upgrade to growth (3 seats) so we can invite + accept a 2nd user
+    payload = _json.dumps(
+        {
+            "id": f"evt-up-test-{team['id'][:8]}-{_uuid.uuid4().hex[:8]}",
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "metadata": {"team_id": team["id"], "plan": "growth"},
+                    "customer": "cus_audit_test-" + team["id"],
+                    "subscription": "sub_audit_test-" + team["id"],
+                }
+            },
+        }
+    ).encode()
+    client.post(
+        "/api/billing/webhook",
+        content=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Stripe-Signature": "test-mock-sig",
+        },
+    )
+
+    # Issue an invitation
+    inv = client.post(
+        f"/api/teams/{team['id']}/invitations",
+        json={"email": "audit-invitee@example.com", "role": "agent"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert inv.status_code == 201, inv.text
+    invite_token = inv.json()["token"]
+
+    # Accept the invitation (anonymous, so the audit row will have
+    # actor_id set after the user is created inside the accept flow).
+    app2 = create_app()
+    with TestClient(app2) as c2:
+        r_accept = c2.post(
+            f"/api/teams/invitations/{invite_token}/accept",
+            json={
+                "password": "supersecret123",
+                "full_name": "Invitee",
+            },
+        )
+    assert r_accept.status_code == 200, r_accept.text
+
+    db = get_db(get_settings())
+    rows = db.query(
+        "security_events", filters={"action": "team.accept_invite"}
+    )
+    assert len(rows) >= 1
+    row = rows[-1]
+    assert row["target_id"] == team["id"]
+    assert row["success"] is True

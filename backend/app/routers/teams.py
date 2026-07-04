@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 
 from app.adapters.supabase import SupabaseAdapter
 from app.deps import CurrentUserIdDep, DBDep, EmailDep
@@ -163,6 +163,7 @@ def invite_member(
 def accept_invitation(
     token: str,
     payload: InvitationAcceptIn,
+    request: Request,
     supabase: DBDep,
 ) -> InvitationAcceptOut:
     """ST-MT-09: Accept an invite — creates user (if new) + adds to team + returns JWT."""
@@ -262,6 +263,22 @@ def accept_invitation(
 
     settings = get_settings()
     access_token = create_access_token(str(user_id), email, settings=settings)
+
+    # T-503: emit audit row (best-effort — write_event swallows errors)
+    from app.audit_log import record_accept_invite
+
+    fwd = request.headers.get("x-forwarded-for")
+    ip = fwd.split(",")[0].strip() if fwd else None
+    if not ip and request.client:
+        ip = request.client.host
+    ua = request.headers.get("user-agent")
+    record_accept_invite(
+        supabase,
+        user_id=str(user_id),
+        team_id=str(team_id),
+        ip=ip,
+        user_agent=ua,
+    )
 
     return InvitationAcceptOut(
         access_token=access_token,
