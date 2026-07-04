@@ -4,7 +4,7 @@
 - **Branch**: feat/security-hardening
 - **PR**: (TBD)
 - **Last action**: 2026-07-04T10:35:00Z
-- **Next action**: Run /implement T-504 (RLS write-path policies)
+- **Next action**: Run /implement T-505 (docs/security.md + final verify)
 - **Notes**:
   - 🎉 **Cycle 4 (per-seat billing + Stripe) shipped via PR #5**
   - Merged at `5ed76ba` to main
