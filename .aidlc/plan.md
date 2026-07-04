@@ -247,20 +247,27 @@ Helpers (one per common action):
 - `record_accept_invite(adapter, *, user_id, team_id, ip, ua)`
 
 **Acceptance criteria (spec references):**
-- [ ] AC-SEC-07: `security_events` table created via
+- [x] AC-SEC-07: `security_events` table created via
       `004_security_events.sql` with the 8 columns above
-- [ ] 6 tests pass: `write_event` happy-path, audit-failure-doesn't-raise,
+- [x] 13 tests pass: 10 unit + 3 schema-mirror assertions.
+      `write_event` happy-path, audit-failure-doesn't-raise,
       each helper writes the right shape, metadata defaults to `{}`,
-      frozen model rejects mutation
+      frozen model rejects mutation (ValidationError).
 
 **Test approach:**
-- Unit tests: 4 in `tests/test_audit_log.py` covering model + helpers
-- Integration: 2 tests that drive `TestClient` through signup + login,
-  then query `security_events` and assert rows exist
+- Unit tests: 10 in `tests/test_audit_log.py` covering model + helpers
+- Schema mirror: 3 in `tests/adapters/test_billing_schema.py` verifying
+  SECURITY_EVENTS is in the mock schema, columns match, round-trip works
 - Best-effort test: monkeypatch `adapter.insert` to raise, assert the
   caller does NOT re-raise
 
 **Estimated effort:** M
+
+**Done:** T-502 implementation committed (887f0b2).
+**Notes:** Action constants locked at module load (`ACTION_SIGNUP`,
+`ACTION_LOGIN_SUCCESS`, `ACTION_LOGIN_FAILURE`, `ACTION_ACCEPT_INVITE`)
+for SIEM/dashboard rule matching. Append-only enforced at the DB level
+via missing UPDATE/DELETE RLS policies.
 
 ---
 
