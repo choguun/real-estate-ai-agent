@@ -161,18 +161,18 @@ Validators implemented:
 deploy exits before binding to a port.
 
 **Acceptance criteria (spec references):**
-- [ ] AC-SEC-01: `ENV=production` + `JWT_SECRET=dev-jwt-secret-change-me`
+- [x] AC-SEC-01: `ENV=production` + `JWT_SECRET=dev-jwt-secret-change-me`
       → raises before `FastAPI(...)` runs
-- [ ] AC-SEC-02: `ENV=production` + `JWT_SECRET` < 32 bytes → raises
+- [x] AC-SEC-02: `ENV=production` + `JWT_SECRET` < 32 bytes → raises
       with message including byte count
-- [ ] AC-SEC-03: `ENV=dev` + `JWT_SECRET=dev-jwt-secret-change-me` →
+- [x] AC-SEC-03: `ENV=dev` + `JWT_SECRET=dev-jwt-secret-change-me` →
       succeeds (dev override)
-- [ ] AC-SEC-04: `ENV=production` + `CORS_ORIGINS=["*"]` → raises
-- [ ] AC-SEC-05: `ENV=production` + `LINE_CHANNEL_SECRET=dev-...-change-me`
+- [x] AC-SEC-04: `ENV=production` + `CORS_ORIGINS=["*"]` → raises
+- [x] AC-SEC-05: `ENV=production` + `LINE_CHANNEL_SECRET=dev-...-change-me`
       → raises
-- [ ] AC-SEC-06: `ENV=production` + `USE_MOCKS=false` +
+- [x] AC-SEC-06: `ENV=production` + `USE_MOCKS=false` +
       `STRIPE_API_KEY=sk_test_placeholder` → raises
-- [ ] All 12 validator tests pass + 302 existing tests still pass
+- [x] All 12 validator tests pass + 302 existing tests still pass
 
 **Test approach:**
 - Unit tests: 12 in `tests/test_security_validation.py`, one per
@@ -183,6 +183,11 @@ deploy exits before binding to a port.
 - Regression: full suite green.
 
 **Estimated effort:** M
+
+**Done:** T-501 implementation committed (commit sha after push).
+**Notes:** Renamed `validate()` → `validate_security()` to avoid
+clashing with Pydantic's classmethod `BaseModel.validate(...)`.
+19 tests total (12 unit + 3 integration + 4 boundary).
 
 ---
 

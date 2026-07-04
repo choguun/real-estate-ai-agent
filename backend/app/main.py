@@ -48,6 +48,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Build the FastAPI app. Tests pass a custom Settings for isolation."""
     settings = settings or get_settings()
+    # Cycle 5 T-501: fail-fast on insecure defaults in non-dev envs.
+    # Must run before `FastAPI(...)` so a bad deploy exits before
+    # binding to a port.
+    settings.validate_security()
     app = FastAPI(
         title=settings.app_name,
         version=settings.app_version,

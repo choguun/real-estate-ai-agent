@@ -91,6 +91,35 @@ class Settings(BaseSettings):
 
     cors_origins: list[str] = ["*"]
 
+    # ── Cycle 5 T-501 fail-fast validators ──
+    # Call `settings.validate()` after construction (or from
+    # `create_app()`) to ensure non-dev deployments don't ship with
+    # insecure defaults. See `app/security_validation.py`.
+
+    def validate_security(self) -> None:
+        """Run all security validators. Raises ValueError on failure.
+
+        This is the cycle-5 fail-fast gate. Call this from
+        `create_app()` so a misconfigured production deploy exits
+        before binding to a port.
+
+        Named `validate_security` (not `validate`) because Pydantic's
+        BaseModel already defines a classmethod `validate` with a
+        different signature; overriding would break Pydantic.
+        """
+        # Imported here to avoid a circular import at module-load time.
+        from app.security_validation import (
+            validate_cors_origins,
+            validate_jwt_secret,
+            validate_line_channel_secret,
+            validate_stripe_api_key,
+        )
+
+        validate_jwt_secret(self.jwt_secret, env=self.env)
+        validate_cors_origins(self.cors_origins, env=self.env)
+        validate_line_channel_secret(self.line_channel_secret, env=self.env)
+        validate_stripe_api_key(self.stripe_api_key, use_mocks=self.use_mocks, env=self.env)
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

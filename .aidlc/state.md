@@ -4,7 +4,7 @@
 - **Branch**: feat/security-hardening
 - **PR**: (TBD)
 - **Last action**: 2026-07-04T10:35:00Z
-- **Next action**: Run /implement T-501 (Settings fail-fast validators)
+- **Next action**: Run /implement T-502 (audit log infra)
 - **Notes**:
   - 🎉 **Cycle 4 (per-seat billing + Stripe) shipped via PR #5**
   - Merged at `5ed76ba` to main
