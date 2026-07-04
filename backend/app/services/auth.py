@@ -11,6 +11,7 @@ class binding flips.
 
 from __future__ import annotations
 
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -19,7 +20,14 @@ import bcrypt
 import jwt
 
 from app.adapters.supabase.base import SupabaseAdapter
+from app.audit_log import (
+    record_login_failure,
+    record_login_success,
+    record_signup,
+)
 from app.config import Settings
+
+logger = logging.getLogger(__name__)
 
 
 class AuthError(Exception):
@@ -96,7 +104,15 @@ class AuthService:
         self._settings = settings
 
     # ─── signup ───────────────────────────────────────────────────────
-    def signup(self, *, email: str, full_name: str, password: str) -> dict[str, Any]:
+    def signup(
+        self,
+        *,
+        email: str,
+        full_name: str,
+        password: str,
+        ip: str | None = None,
+        user_agent: str | None = None,
+    ) -> dict[str, Any]:
         existing = self._db.query("users", filters={"email": email})
         if existing:
             raise DuplicateEmail(f"Email already registered: {email}")
@@ -123,22 +139,41 @@ class AuthService:
         user = self._db.update("users", user["id"], {"team_id": personal["id"]}) or user
 
         token = create_access_token(user["id"], user["email"], settings=self._settings)
+        # T-503: emit audit row (best-effort — write_event swallows errors)
+        record_signup(self._db, user_id=user["id"], ip=ip, user_agent=user_agent)
         return {"user": _public_user(user), "token": token}
 
     # ─── login ────────────────────────────────────────────────────────
-    def login(self, *, email: str, password: str) -> dict[str, Any]:
+    def login(
+        self,
+        *,
+        email: str,
+        password: str,
+        ip: str | None = None,
+        user_agent: str | None = None,
+    ) -> dict[str, Any]:
         rows = self._db.query("users", filters={"email": email})
         if not rows:
             # Constant-time-ish (still tell the truth but log nothing)
+            record_login_failure(self._db, email=email, ip=ip, user_agent=user_agent)
             raise InvalidCredentials("Invalid email or password")
         user = rows[0]
         if not user.get("password_hash") or not verify_password(password, user["password_hash"]):
+            record_login_failure(self._db, email=email, ip=ip, user_agent=user_agent)
             raise InvalidCredentials("Invalid email or password")
         token = create_access_token(user["id"], user["email"], settings=self._settings)
+        record_login_success(self._db, user_id=user["id"], ip=ip, user_agent=user_agent)
         return {"user": _public_user(user), "token": token}
 
     # ─── LIFF (LINE) login ───────────────────────────────────────────
-    def liff_login(self, *, line_user_id: str, display_name: str | None) -> dict[str, Any]:
+    def liff_login(
+        self,
+        *,
+        line_user_id: str,
+        display_name: str | None,
+        ip: str | None = None,
+        user_agent: str | None = None,
+    ) -> dict[str, Any]:
         rows = self._db.query("users", filters={"line_user_id": line_user_id})
         if rows:
             user = rows[0]
@@ -154,6 +189,7 @@ class AuthService:
                 },
             )
         token = create_access_token(user["id"], user["email"], settings=self._settings)
+        record_login_success(self._db, user_id=user["id"], ip=ip, user_agent=user_agent)
         return {"user": _public_user(user), "token": token}
 
     # ─── session lookup ──────────────────────────────────────────────

@@ -187,3 +187,128 @@ def test_me_cannot_fetch_a_different_user_via_token(
     res = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token_a}"})
     assert res.status_code == 200
     assert res.json()["id"] == user_a_id
+
+
+# ─── Cycle 6 T-602: rate-limit on /api/auth/login + /signup ──────
+
+
+def test_login_rate_limited_after_5_attempts(client: TestClient) -> None:
+    """AC-RL-01: 6th login from same IP within 15min returns 429."""
+    # Pre-create one user so login attempts are not "user not found"
+    client.post(
+        "/api/auth/signup",
+        json={
+            "email": "ratelimit-login@example.com",
+            "password": "supersecret123",
+            "full_name": "RL",
+        },
+    )
+
+    # Reset the rate-limiter cache so this test isn't polluted by other
+    # tests that share the singleton.
+    from app.rate_limit_factory import reset_cache
+
+    reset_cache()
+
+    # First 5 login attempts (wrong password) return 401
+    for _ in range(5):
+        r = client.post(
+            "/api/auth/login",
+            json={
+                "email": "ratelimit-login@example.com",
+                "password": "wrong-password",
+            },
+        )
+        assert r.status_code == 401, r.text
+    # 6th attempt is rate-limited
+    r6 = client.post(
+        "/api/auth/login",
+        json={
+            "email": "ratelimit-login@example.com",
+            "password": "wrong-password",
+        },
+    )
+    assert r6.status_code == 429, r6.text
+    assert "retry-after" in {k.lower() for k in r6.headers.keys()}
+
+
+def test_signup_rate_limited_after_5_attempts(client: TestClient) -> None:
+    """AC-RL-02: 6th signup from same IP within 1hr returns 429.
+
+    Uses distinct emails per attempt so the 409 duplicate-email path
+    doesn't interfere with the rate-limit check (the rate-limit
+    check happens BEFORE the dedup check).
+    """
+    from app.rate_limit_factory import reset_cache
+
+    reset_cache()
+
+    # First 5 signup attempts (any email) succeed (201) or duplicate (409)
+    for i in range(5):
+        client.post(
+            "/api/auth/signup",
+            json={
+                "email": f"ratelimit-signup-{i}@example.com",
+                "password": "supersecret123",
+                "full_name": f"RL{i}",
+            },
+        )
+    # 6th attempt is rate-limited
+    r6 = client.post(
+        "/api/auth/signup",
+        json={
+            "email": "ratelimit-signup-6@example.com",
+            "password": "supersecret123",
+            "full_name": "RL6",
+        },
+    )
+    assert r6.status_code == 429, r6.text
+    assert "retry-after" in {k.lower() for k in r6.headers.keys()}
+
+
+def test_rate_limit_emits_audit_row(client: TestClient) -> None:
+    """AC-RL-04 (auth subset): each 429 writes one security_events row
+    with action='auth.rate_limited'.
+    """
+    from app.adapters.supabase._factory import get_db
+    from app.config import get_settings
+    from app.rate_limit_factory import reset_cache
+
+    reset_cache()
+
+    # Burn through the login limit (5 attempts)
+    client.post(
+        "/api/auth/signup",
+        json={
+            "email": "ratelimit-audit@example.com",
+            "password": "supersecret123",
+            "full_name": "Audit",
+        },
+    )
+    for _ in range(5):
+        client.post(
+            "/api/auth/login",
+            json={
+                "email": "ratelimit-audit@example.com",
+                "password": "wrong",
+            },
+        )
+    # 6th triggers the audit row
+    client.post(
+        "/api/auth/login",
+        json={
+            "email": "ratelimit-audit@example.com",
+            "password": "wrong",
+        },
+    )
+
+    db = get_db(get_settings())
+    rows = db.query(
+        "security_events", filters={"action": "auth.rate_limited"}
+    )
+    assert len(rows) >= 1, "expected at least one rate-limit audit row"
+    row = rows[-1]
+    assert row["success"] is False
+    assert row["actor_id"] is None  # anonymous
+    assert row["metadata"]["action"] == "auth.login"
+    assert row["metadata"]["limit"] == 5
