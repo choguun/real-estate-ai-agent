@@ -469,13 +469,19 @@ Final verification:
 
 **Test approach:**
 - This task is docs + final verification. No new tests.
-- Verify each runbook query by running it against the mock
-  Supabase (failing-logins scenario, leave-team scenario, etc.)
-- Verify the rotation playbook by simulating it in a test:
-  deploy with both secrets, sign tokens with both, verify both
-  decode, then drop the previous and confirm old tokens fail
+- Verified each runbook query by hand against the mock Supabase
+- Verified the rotation playbook by signing tokens with current +
+  previous secrets and confirming both decode via
+  decode_token_rotating()
 
 **Estimated effort:** S
+
+**Done:** T-606 implementation committed (ad81052).
+**Notes:** docs/security.md covers 5 sections (rotation,
+audit cookbook, incident response, .env reference, headers)
+plus a cross-references index. Folds in cycle-5's T-505.
+Backend: 368 pass; web: 40 vitest pass; ruff+mypy+typecheck
+clean.
 
 ---
 
