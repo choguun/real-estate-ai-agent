@@ -5,8 +5,9 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 
-from app.deps import DBDep, SettingsDep
+from app.deps import DBDep, RateLimiterDep, SettingsDep
 from app.domain.user import AuthResponse, LiffIn, LoginIn, SignupIn, User
 from app.services.auth import (
     AuthError,
@@ -77,8 +78,28 @@ def signup(
     payload: SignupIn,
     request: Request,
     svc: AuthServiceDep,
-) -> dict[str, object]:
+    rl: RateLimiterDep,
+    db: DBDep,
+) -> dict[str, object] | JSONResponse:
+    # Cycle 6 T-602: per-IP rate-limit on signup to prevent scripted
+    # account-creation / enumeration probing.
     ip, ua = _client_metadata(request)
+    rl_result = rl.allow(key=str(ip or "unknown"), action="auth.signup")
+    if not rl_result.allowed:
+        from app.audit_log import record_rate_limited
+
+        record_rate_limited(
+            db,
+            ip=ip,
+            action="auth.signup",
+            limit=rl_result.limit,
+            user_agent=ua,
+        )
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "rate limit exceeded"},
+            headers={"Retry-After": str(rl_result.retry_after)},
+        )
     try:
         return svc.signup(
             email=payload.email,
@@ -96,10 +117,27 @@ def login(
     payload: LoginIn,
     request: Request,
     svc: AuthServiceDep,
-) -> dict[str, object]:
-    # TODO(security): add a rate limiter (e.g. slowapi, Redis counter) before
-    # any non-dev exposure. Today /api/auth/login is brute-forceable.
+    rl: RateLimiterDep,
+    db: DBDep,
+) -> dict[str, object] | JSONResponse:
+    # Cycle 6 T-602: per-IP rate-limit on login to prevent brute-force.
     ip, ua = _client_metadata(request)
+    rl_result = rl.allow(key=str(ip or "unknown"), action="auth.login")
+    if not rl_result.allowed:
+        from app.audit_log import record_rate_limited
+
+        record_rate_limited(
+            db,
+            ip=ip,
+            action="auth.login",
+            limit=rl_result.limit,
+            user_agent=ua,
+        )
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "rate limit exceeded"},
+            headers={"Retry-After": str(rl_result.retry_after)},
+        )
     try:
         return svc.login(
             email=payload.email,
@@ -116,7 +154,7 @@ def liff(
     payload: LiffIn,
     request: Request,
     svc: AuthServiceDep,
-) -> dict[str, object]:
+) -> dict[str, object] | JSONResponse:
     ip, ua = _client_metadata(request)
     return svc.liff_login(
         line_user_id=payload.line_user_id,
@@ -130,7 +168,7 @@ def liff(
 def me(
     svc: AuthServiceDep,
     authorization: Annotated[str | None, Header()] = None,
-) -> dict[str, object]:
+) -> dict[str, object] | JSONResponse:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED,

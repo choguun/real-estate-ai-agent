@@ -8,6 +8,9 @@ from app.main import create_app
 
 
 def _client() -> TestClient:
+    from tests.conftest import _reset_all_caches
+
+    _reset_all_caches()
     return TestClient(create_app())
 
 

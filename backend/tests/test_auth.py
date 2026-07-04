@@ -229,7 +229,7 @@ def test_login_rate_limited_after_5_attempts(client: TestClient) -> None:
         },
     )
     assert r6.status_code == 429, r6.text
-    assert "retry-after" in {k.lower() for k in r6.headers.keys()}
+    assert "retry-after" in {k.lower() for k in r6.headers}
 
 
 def test_signup_rate_limited_after_5_attempts(client: TestClient) -> None:
@@ -263,15 +263,16 @@ def test_signup_rate_limited_after_5_attempts(client: TestClient) -> None:
         },
     )
     assert r6.status_code == 429, r6.text
-    assert "retry-after" in {k.lower() for k in r6.headers.keys()}
+    assert "retry-after" in {k.lower() for k in r6.headers}
 
 
-def test_rate_limit_emits_audit_row(client: TestClient) -> None:
+def test_rate_limit_emits_audit_row(client: TestClient, db: MockSupabaseAdapter) -> None:
     """AC-RL-04 (auth subset): each 429 writes one security_events row
     with action='auth.rate_limited'.
+
+    Uses the `db` fixture directly (the same adapter the app's
+    dependency_overrides points to) so the audit row is visible.
     """
-    from app.adapters.supabase._factory import get_db
-    from app.config import get_settings
     from app.rate_limit_factory import reset_cache
 
     reset_cache()
@@ -302,10 +303,7 @@ def test_rate_limit_emits_audit_row(client: TestClient) -> None:
         },
     )
 
-    db = get_db(get_settings())
-    rows = db.query(
-        "security_events", filters={"action": "auth.rate_limited"}
-    )
+    rows = db.query("security_events", filters={"action": "auth.rate_limited"})
     assert len(rows) >= 1, "expected at least one rate-limit audit row"
     row = rows[-1]
     assert row["success"] is False
