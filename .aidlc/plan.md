@@ -1,394 +1,414 @@
-# Plan: AIDLC Cycle 3 — Multi-Tenant Teams with RLS
+# Plan: AIDLC Cycle 4 — Per-Seat Billing + Stripe Webhooks
 
 > **Status:** DRAFT (proposal; pending user approval)
 > **Date:** 2026-07-04
-> **Branch (proposed):** `feat/multi-tenant-teams`
-> **Source brief:** spec's "Out of Scope (Month 1)" + spec's "Out of Scope
-> (Cycle 2)" — multi-tenant teams / RLS policies was deferred to Cycle 3+
-> and is the foundation for billing, audit, and analytics in later cycles.
-> **Schema state:** `migrations/001_init.sql` already has the `teams`
-> table and `team_id` columns on `users`/`properties`/`leads`/
-> `appointments`/`contracts` — the bones are in place; the wiring is not.
+> **Branch (proposed):** `feat/billing-stripe`
+> **Source brief:** spec's "Out of Scope (Cycle 3)" explicitly called out
+> "per-seat billing (charge per active member)". Cycle 3 gave us the
+> team model; this cycle gives it a price tag.
 
 ---
 
 ## Why this cycle
 
-The Month-1 MVP + cycle-2 real-adapter wiring assume **single-tenant
-user-scoping**: every property/lead/message is owned by a single user.
-This is fine for a solo agent but blocks the SaaS from scaling past
-one user per account. The schema already includes `teams` and
-`team_id` columns, but no router or adapter actually uses them.
+The Month-1 MVP (PR #1) + cycle 2 (real adapters, PR #3) + cycle 3
+(multi-tenant teams, PR #4) give us:
 
-Without this cycle, the product cannot:
-- Onboard a small team (2-5 agents) sharing a property pool
-- Attribute a LINE conversation to "the team" rather than one user
-- Charge per-seat (Cycle 4+)
-- Show "my team's listings" or "team-wide dashboard"
-- Pass an enterprise security review (no tenant isolation)
+- A working real-estate SaaS that agents can deploy in production
+- A team model where 1-5 agents share a property pool
+- Cross-team isolation (mock + Supabase RLS)
 
-This cycle lights up multi-tenant teams end-to-end: schema migration +
-mock + real Supabase RLS + backend services + routers + frontend.
+What's missing: **a price tag.** Cycle 4 closes that gap by adding
+the Stripe integration that turns the team model into a monetizable
+SaaS. Without this cycle:
+
+- The product cannot charge for usage
+- The "team plan: starter / growth / team" column on `teams` is
+  cosmetic (set on creation but never read)
+- New operators have no way to upgrade to a paid plan
+- The team owner cannot invite more than ~5 agents before needing
+  manual billing UX
+
+This cycle lights up the billing loop end-to-end: plan selection at
+signup, Stripe Checkout for upgrades, webhook for plan changes,
+member-count enforcement (per-seat limit), and an in-app Billing
+page.
+
+The pricing model:
+
+| Plan | Members included | Monthly price (USD) | Properties | AI listings/mo |
+|------|------------------|---------------------|-------------|------------------|
+| `starter` | 1 | $0 (free) | 5 | 20 |
+| `growth` | 3 | $29 | 25 | 200 |
+| `team` | 10 | $99 | 100 | 1,000 |
+
+`enterprise` is a follow-up (custom contract).
 
 ---
 
 ## Goal
 
-When this cycle ships, an agent can:
+When this cycle ships, an operator can:
 
 ```bash
-# 1. Create a team
-curl -X POST /api/teams -H "Authorization: Bearer $TOK" -d '{"name":"Smith Realty"}'
-# → {"id":"...","name":"Smith Realty","plan":"starter","owner_id":"..."}
-
-# 2. Invite a teammate by email
-curl -X POST /api/teams/$TEAM_ID/invitations -H "..." -d '{"email":"alice@x.com","role":"agent"}'
-# → {"invitation_token":"...","expires_at":"..."}
-
-# 3. Alice accepts (creates user if new)
-curl -X POST /api/teams/invitations/$TOKEN/accept -H "..."
-# → {"access_token":"...","team_id":"..."}
-
-# 4. Either user can now see team-scoped properties/leads
-curl -X GET /api/properties -H "Authorization: Bearer $ALICE_TOK"
-# → [{"title":"Smith Realty Team's condo",...}, ...]   # team-scoped, not user-scoped
+# 1. Sign up → land on /pricing → click "Upgrade to Growth"
+# 2. Stripe Checkout opens, returns to /dashboard/billing?upgrade=success
+# 3. Webhook updates team.plan = 'growth' (mock in dev: button click)
+# 4. The /api/billing/portal opens Stripe's customer portal
+# 5. /api/billing/seats returns {plan, members_used, members_limit, status}
+# 6. Enforce: can't invite a 4th member on the Growth plan (plan limit)
+# 7. Live smoke w/ Stripe test mode (RUN_LIVE_BILLING=1) verifies
+#    checkout-session creation + webhook handling
 ```
 
-…with cross-team isolation enforced:
-- Mock: via application-level `team_id` filter (no RLS)
-- Real Supabase: via RLS policies in `migrations/002_rls.sql` (DB-enforced)
-- The same backend code path works in both modes.
+…with zero router code changes to existing endpoints (only the team
+invitation router gets a plan-limit guard).
 
 ---
 
 ## Non-goals (still out of scope after this cycle)
 
-- **Per-seat billing** (charge per active member) — Cycle 4+
-- **Audit log UI** (who changed what when) — Cycle 4+
-- **Granular roles** (per-resource ACL like "can edit but not delete")
-- **Team-scoped LINE OA** (currently one LINE channel per agent;
-  multi-tenant would mean one channel per team) — Cycle 5+
-- **Cross-team data sharing** (deals between teams) — not in roadmap
-- **Team-departures + handover** (reassign properties to a new owner)
-  — Cycle 4+
-
-These remain candidates for **Cycle 4+**.
+- **Stripe Tax** (auto tax calculation) — manual for MVP
+- **Coupons / promo codes** — Cycle 5+
+- **Annual pricing** — Cycle 5+
+- **Per-property billing** — flat per-seat only
+- **Stripe Connect / multi-tenant payouts** — single vendor MVP
+- **Plan downgrade refunds** — handled by Stripe, we just mirror status
+- **Audit log UI for billing events** — Cycle 5+ (the table exists)
 
 ---
 
 ## Strategy
 
-8 vertical slices. Foundation (T-301 to T-303) lays the schema and
-membership model. T-304 re-scopes existing routers. T-305 turns on RLS
-on real Supabase. T-306/T-307 are the UI + invite flow. T-308 updates
-the existing test suite + adds RLS smoke tests.
+7 vertical slices. Foundation (T-401 to T-403) is mock-first and ships
+without any external account. T-404 turns on RLS-style enforcement on
+team-scoped counts. T-405 is the real Stripe wiring (httpx-based).
+T-406 adds the in-app Billing page. T-407 updates tests + docs.
 
 ```dot
-digraph cycle3 {
-    T-301 [label="T-301: Schema migration + mock team scoping"];
-    T-302 [label="T-302: Team CRUD + membership routes"];
-    T-303 [label="T-303: Member management (role + remove + leave)"];
-    T-304 [label="T-304: Re-scope existing routers by team_id"];
-    T-305 [label="T-305: Supabase RLS policies + live smoke"];
-    T-306 [label="T-306: Frontend team settings page + invite UI"];
-    T-307 [label="T-307: Invite email mock + accept flow"];
-    T-308 [label="T-308: Update test suite + RLS smoke tests"];
+digraph cycle4 {
+    T-401 [label="T-401: Plan schema + billing customers table"];
+    T-402 [label="T-402: BillingAdapter Protocol + mock"];
+    T-403 [label="T-403: /api/billing/* routes (mocked Stripe)"];
+    T-404 [label="T-404: Plan-limit guard on invitations"];
+    T-405 [label="T-405: Real Stripe adapter + webhook handler"];
+    T-406 [label="T-406: Frontend /dashboard/billing page"];
+    T-407 [label="T-407: Update test suite + docs/billing.md"];
 
-    T-301 -> T-302;
-    T-301 -> T-304;
-    T-302 -> T-303;
-    T-302 -> T-304;
-    T-304 -> T-305;
-    T-305 -> T-306;
-    T-302 -> T-307;
-    T-307 -> T-306;
-    T-306 -> T-308;
-    T-304 -> T-308;
+    T-401 -> T-402;
+    T-402 -> T-403;
+    T-403 -> T-404;
+    T-404 -> T-405;
+    T-405 -> T-406;
+    T-403 -> T-406;
+    T-406 -> T-407;
+    T-404 -> T-407;
 }
 ```
 
-**Parallelism:** T-303 + T-304 can run in parallel after T-302. T-307
-can run in parallel with T-306 once T-302 lands.
+**Parallelism:** T-403 (mock routes) and T-406 (frontend) can run in
+parallel after T-402 lands. T-404 needs T-403. T-405 needs T-403.
 
 ---
 
 ## Tasks
 
-### T-301: Schema migration + mock team scoping
+### T-401: Plan schema + billing customers table
 
 **Files:**
-- `backend/migrations/002_teams.sql` (new — adds `team_memberships` table,
-  updates `teams` with `plan` + timestamps, adds RLS-enabling placeholders)
-- `backend/app/adapters/supabase/_schema.py` (update — add TEAM_MEMBERSHIPS table)
-- `backend/app/adapters/supabase/mock.py` (update — add `team_memberships`
-  storage + add `team_id` scoping on every query helper)
-- `backend/tests/adapters/test_mock_supabase.py` (update — tests for
-  `team_memberships` table + scoped queries)
-- `backend/migrations/002_rls.sql` (new — Supabase RLS policies; T-305
-  will exercise them against a live project)
+- `backend/migrations/003_billing.sql` (new — `billing_customers` table
+  mapping `team_id → stripe_customer_id`, plus indexes)
+- `backend/app/adapters/supabase/_schema.py` (update — add
+  `BILLING_CUSTOMERS` table)
+- `backend/app/adapters/supabase/mock.py` (no change — the mock handles
+  any table in the schema)
+- `backend/tests/adapters/test_billing_schema.py` (new — 4 tests
+  covering table presence + UNIQUE on team_id)
 
 **Description:**
-The `teams` table already exists from cycle 1. This task adds:
-1. `team_memberships` table — explicit join with `role` per member
-   (separate from `users.team_id` which becomes a derived/default field)
-2. Mock: stores team_memberships rows + scopes every `list_*` /
-   `get_*` method by `team_id` (currently they're all user-scoped)
-3. Migration files mirror each other (mock + real) so the schema is
-   consistent.
+The schema-mirror pattern from cycles 1+3 continues. We add one new
+table:
 
-**Why this is the foundation:** the rest of the cycle depends on
-`team_id` being queryable + team membership being enforced.
-
-**Acceptance criteria:**
-- [ ] `migrations/002_teams.sql` declares `team_memberships` with
-  `(team_id, user_id, role, joined_at)` and a composite PK
-- [ ] Mock `team_memberships` is queryable: list by team, list by user,
-  add/remove members
-- [ ] Every mock `list_*` / `get_*` now filters by `team_id` (with
-  `user_id` as fallback for backwards compat — see T-304 for the cutover)
-- [ ] Tests: 8+ new tests covering team_memberships CRUD + scoped queries
-
-**Estimated effort:** M (split into T-301a schema, T-301b mock scoping)
-
----
-
-### T-302: Team CRUD + membership routes
-
-**Files:**
-- `backend/app/domain/team.py` (new — DTOs: TeamCreate, TeamOut,
-  TeamMemberOut, InvitationCreate, InvitationOut, InvitationAccept)
-- `backend/app/routers/teams.py` (new — POST /api/teams, GET /api/teams/me,
-  GET /api/teams/{id}, GET /api/teams/{id}/members)
-- `backend/app/services/team_service.py` (new — create_team, get_user_team,
-  list_members, invite_member)
-- `backend/app/main.py` (update — registers teams router)
-- `backend/tests/test_teams.py` (new — ST-T-302 tests)
-
-**Description:**
-Backend service + router for the team lifecycle. The first user
-who calls `POST /api/teams` becomes the team `owner`. Subsequent
-users join via invitations (T-307). Members have roles: `owner`,
-`admin`, `agent` — used by T-303 to gate role changes.
-
-**Acceptance criteria:**
-- [ ] ST-T-302a: `POST /api/teams` creates team, sets caller as owner
-- [ ] ST-T-302b: `GET /api/teams/me` returns caller's team(s)
-- [ ] ST-T-302c: `GET /api/teams/{id}/members` returns all members + roles
-- [ ] ST-T-302d: 401 on unauthenticated access; 404 on team not found
-  (or user not a member — pick one and document)
-- [ ] The `plan` field is set to 'starter' on creation; future billing
-  cycle can upgrade it
-- [ ] All endpoints require authentication (existing `get_current_user`)
-
-**Estimated effort:** M
-
----
-
-### T-303: Member management (role change + remove + leave)
-
-**Files:**
-- `backend/app/routers/teams.py` (update — add PATCH/DELETE /api/teams/{id}/members/{user_id},
-  POST /api/teams/{id}/leave)
-- `backend/app/services/team_service.py` (update — change_role, remove_member)
-- `backend/tests/test_teams.py` (update — member management tests)
-
-**Description:**
-Owners/admins can change member roles and remove members. Members can
-leave voluntarily. Critical invariant: an owner cannot demote or
-remove themselves (to prevent the team from becoming ownerless);
-they must transfer ownership first (Cycle 4+) or delete the team.
-
-**Acceptance criteria:**
-- [ ] ST-T-303a: `PATCH .../members/{user_id}` changes role (owner only)
-- [ ] ST-T-303b: `DELETE .../members/{user_id}` removes (owner only,
-  except for self)
-- [ ] ST-T-303c: `POST /api/teams/{id}/leave` self-removes (owner
-  cannot leave — must delete team or transfer ownership)
-- [ ] ST-T-303d: Only `owner` role can change/remove others
-- [ ] ST-T-303e: `admin` can remove `agent` (not other admins or
-  owner); cannot change roles
-- [ ] Audit trail: `team_memberships.left_at` + `removed_by` recorded
-
-**Estimated effort:** S/M
-
----
-
-### T-304: Re-scope existing routers by `team_id`
-
-**Files:**
-- `backend/app/routers/properties.py` (update — filter by team_id)
-- `backend/app/routers/leads.py` (update — filter by team_id)
-- `backend/app/routers/messages.py` (update — filter by team_id)
-- `backend/app/routers/ai.py` (update — listings scoped by team_id)
-- `backend/app/deps.py` (update — `get_current_team()` dependency
-  that returns the caller's active team_id, raising 403 if no team)
-- `backend/tests/test_properties.py` (update — team-scoped tests)
-- `backend/tests/test_leads.py` (update)
-- `backend/tests/test_ai_generator.py` (update)
-- `backend/tests/test_dashboard.py` (update)
-- `backend/tests/test_line_webhook.py` (update — webhook attributes
-  to the team, not the single agent)
-
-**Description:**
-This is the cutover: replace `user_id`-scoped queries with
-`team_id`-scoped queries. Every router endpoint that currently does
-`db.query("properties", filters={"user_id": current_user["id"]})` now
-does `db.query("properties", filters={"team_id": current_team_id})`.
-
-The `_resolve_owner` function in `line_webhook.py` (which currently
-finds "the first active user") now finds "the first active user in
-the team that owns this LINE OA". For MVP single-tenant-per-LINE-OA
-that's a lookup via env (`LINE_DEFAULT_TEAM_ID`).
-
-**Acceptance criteria:**
-- [ ] ST-T-304a: User in team X can list team X's properties
-- [ ] ST-T-304b: User in team X CANNOT see team Y's properties (404
-  or empty list — pick one)
-- [ ] ST-T-304c: Cross-user within same team: Alice can see Bob's
-  properties (shared pool)
-- [ ] ST-T-304d: Webhook creates Lead + Message in the correct team
-- [ ] ST-T-304e: All 184 existing tests adapted to team-scoping —
-  no test should rely on cross-user isolation
-- [ ] `get_current_team` dep raises 403 if user has no team yet
-
-**Estimated effort:** L (8+ routers, 6+ test files)
-
----
-
-### T-305: Supabase RLS policies + live smoke
-
-**Files:**
-- `backend/migrations/002_rls.sql` (update — actual RLS policy DDL;
-  already declared in T-301 schema stub)
-- `backend/tests/test_rls_policies.py` (new — assertions on policy
-  existence via PostgREST introspection)
-- `backend/tests/test_live_smoke.py` (update — add team-isolation
-  live smoke test)
-
-**Description:**
-Apply Supabase RLS to `properties`, `leads`, `messages`,
-`generated_listings` so cross-team access is denied at the DB level
-(not just the app level). Mock adapter does NOT need RLS — it
-simulates RLS behavior in code via `team_id` filters.
-
-The RLS policy shape:
 ```sql
-CREATE POLICY team_isolation ON properties
-  USING (team_id = (SELECT team_id FROM users WHERE id = auth.uid()));
-ALTER TABLE properties ENABLE ROW LEVEL SECURITY;
--- Same for leads, messages, generated_listings
+CREATE TABLE billing_customers (
+    team_id UUID PRIMARY KEY REFERENCES teams(id) ON DELETE CASCADE,
+    stripe_customer_id TEXT UNIQUE,
+    stripe_subscription_id TEXT,
+    plan TEXT NOT NULL DEFAULT 'starter' CHECK (plan IN ('starter', 'growth', 'team', 'enterprise')),
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('trialing', 'active', 'past_due', 'canceled')),
+    current_period_end TIMESTAMPTZ,
+    cancel_at_period_end BOOLEAN DEFAULT false,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
 ```
 
+The `plan` field on `teams` (already there) is kept in sync with the
+billing record's `plan` via the `update_team` mock method.
+
+**Why this is the foundation:** everything else reads billing state,
+so the table has to exist first.
+
 **Acceptance criteria:**
-- [ ] ST-T-305a: `migrations/002_rls.sql` declares policies for
-  properties/leads/messages/generated_listings
-- [ ] ST-T-305b: Mock + real adapter BOTH enforce team isolation
-  (mock via code filter; real via RLS)
-- [ ] ST-T-305c: Live smoke test: with real Supabase, RLS denies
-  cross-team access (verify by inserting 2 teams + users,
-  attempting cross-team read, expecting 0 rows)
-- [ ] RLS test runs only on `RUN_LIVE_SMOKE=1` (PostgREST policy
-  introspection needs a real project)
+- [ ] `migrations/003_billing.sql` declares `billing_customers`
+- [ ] `BILLING_CUSTOMERS` Table added to `_schema.py`
+- [ ] `test_sql_matches_mock_schema_tables` still passes
+- [ ] `UNIQUE(stripe_customer_id)` enforces one-team-per-customer
+- [ ] 4 new tests: insert/get/update + cross-team isolation
+
+**Estimated effort:** S
+
+---
+
+### T-402: BillingAdapter Protocol + mock
+
+**Files:**
+- `backend/app/adapters/billing/base.py` (new — `BillingAdapter` Protocol
+  with `create_checkout_session`, `create_portal_session`,
+  `get_subscription`, `cancel_subscription`)
+- `backend/app/adapters/billing/mock.py` (new — `MockBillingAdapter`
+  that creates local "checkout sessions" returning a stub URL, signs
+  no-op "webhooks", records every call for assertions)
+- `backend/app/adapters/billing/real.py` (new — `StripeBillingAdapter`
+  stub that raises `NotImplementedError` on every method)
+- `backend/app/adapters/billing/factory.py` (new — `build_billing_adapter(settings)`)
+- `backend/app/adapters/billing/__init__.py` (new — public re-exports)
+- `backend/tests/adapters/test_real_billing.py` (new — Protocol compliance)
+- `backend/tests/adapters/test_mock_billing.py` (new — 6 tests covering
+  checkout creation, portal session, idempotency, error mapping)
+
+**Description:**
+Just like the email / LINE / Supabase adapters, we add a
+`BillingAdapter` Protocol so the rest of the app never imports a
+specific SDK. The mock-first approach means:
+
+- Mock records every `create_*` call in-memory
+- Mock returns `https://billing-mock.example.com/checkout/{token}` URLs
+- Real adapter is a thin httpx wrapper around the Stripe SDK (in
+  T-405); it raises NotImplementedError until then.
+
+**Why this is separate from T-403:** the adapter is the dependency
+that the routes call into. Building it in isolation means the routes
+can be tested without the implementation.
+
+**Acceptance criteria:**
+- [ ] `BillingAdapter` Protocol with 4 methods
+- [ ] `MockBillingAdapter` records all calls + returns stub URLs
+- [ ] `StripeBillingAdapter` raises NotImplementedError
+- [ ] `build_billing_adapter(settings)` returns mock when `use_mocks=true`
+- [ ] 6 mock tests + 1 Protocol compliance test
+- [ ] 80% coverage maintained
+
+**Estimated effort:** S
+
+---
+
+### T-403: /api/billing/* routes (mocked Stripe)
+
+**Files:**
+- `backend/app/domain/billing.py` (new — `CheckoutRequest`, `BillingSessionOut`,
+  `BillingStatusOut`, `PlanInfo` DTOs)
+- `backend/app/services/billing_service.py` (new — `start_checkout`,
+  `handle_webhook_event`, `sync_subscription_status` — mock-aware,
+  records every Stripe call)
+- `backend/app/routers/billing.py` (new — `GET /api/billing/status`,
+  `POST /api/billing/checkout`, `POST /api/billing/portal`,
+  `POST /api/billing/webhook`)
+- `backend/app/main.py` (update — register billing router)
+- `backend/app/deps.py` (update — `BillingDep`)
+- `backend/tests/test_billing.py` (new — 7 tests covering status,
+  checkout session creation, portal session, webhook signature
+  verification, plan sync)
+
+**Description:**
+The routes:
+- `GET /api/billing/status` — returns `{plan, status, seats_used,
+  seats_limit, period_end, ...}` for the caller's team
+- `POST /api/billing/checkout` — creates a Stripe Checkout session +
+  returns `{url, session_id}` (mock in dev: returns a stub URL)
+- `POST /api/billing/portal` — creates a Stripe Customer Portal session
+- `POST /api/billing/webhook` — verifies Stripe signature, dispatches
+  events (in dev: no signature check, just stores the event in mock)
+
+**Webhook events handled:**
+- `checkout.session.completed` → upgrade team plan
+- `customer.subscription.created` → mark team as subscribed
+- `customer.subscription.updated` → sync plan / status
+- `customer.subscription.deleted` → revert to starter
+- `invoice.payment_failed` → set status=`past_due`, send email
+
+**Why mocking the webhook is safe:** the real Stripe webhook flow
+is identical to the mock — the only difference is the SDK call. Tests
+use the same code path; only the SDK changes.
+
+**Acceptance criteria:**
+- [ ] `GET /api/billing/status` returns team plan + seat counts
+- [ ] `POST /api/billing/checkout` returns `{url, session_id}`
+- [ ] `POST /api/billing/portal` returns `{url, session_id}`
+- [ ] `POST /api/billing/webhook` verifies HMAC-SHA256 signature in
+  real mode (Stripe Webhook Signing Secret); in mock mode accepts
+  any payload (signed dev payloads are accepted for testing)
+- [ ] Plan state survives across requests (mock state is in-memory)
+- [ ] 7 tests cover all routes
 
 **Estimated effort:** M
 
 ---
 
-### T-306: Frontend team settings page + invite UI
+### T-404: Plan-limit guard on invitations
 
 **Files:**
-- `web/app/(app)/dashboard/team/page.tsx` (new — team name, plan,
-  members list with role dropdowns)
-- `web/components/team/InviteMemberModal.tsx` (new — email input +
-  role selector)
-- `web/components/team/MemberRow.tsx` (new — avatar + name + role
-  dropdown + remove button)
-- `web/lib/team.ts` (new — typed API client for team endpoints)
-- `web/lib/api.ts` (update — adds team DTOs + endpoints)
-- `web/__tests__/team.test.tsx` (new — vitest render + interaction)
-- `web/app/(app)/dashboard/page.tsx` (update — shows team name in
-  header now)
+- `backend/app/services/plan_limits.py` (new — `get_seat_limit(plan)`,
+  `assert_can_invite(team)` raises `PlanLimitExceeded`)
+- `backend/app/routers/teams.py` (update — invitation endpoint enforces
+  seat limit; `403 PlanLimitExceeded` if over)
+- `backend/tests/test_team_members.py` (update — add 2 tests:
+  free plan limit + upgrade after Stripe completes)
+- `backend/tests/test_billing.py` (new test — plan-limit guard fires
+  on the right plan)
 
 **Description:**
-A new `/dashboard/team` page where the owner can see the team roster,
-invite new members by email, change roles, and remove members. The
-header on every page now shows the team name (replacing the
-"single agent" framing).
+Wire the billing state into the existing invitation flow. The
+`assert_can_invite` check is called inside `invite_member` AFTER the
+"already a member" check but BEFORE the email send:
+
+```python
+def invite_member(team_id, payload, user_id, supabase, email_svc):
+    if not user_is_member:  # cycle 3
+        raise 403
+    if user_already_member:  # cycle 3
+        raise 409
+    from app.services.plan_limits import assert_can_invite
+    assert_can_invite(supabase, team_id)  # NEW (T-404)
+    ...
+```
+
+**Why a separate task:** this is the "billing affects product
+behavior" hook. Once this lands, inviting more members than the plan
+allows becomes a 403 (instead of silently creating a team that
+overruns the plan).
 
 **Acceptance criteria:**
-- [ ] ST-T-306a: Page renders team name + plan + members list
-- [ ] ST-T-306b: "Invite member" button opens modal; submitting
-  posts to `/api/teams/{id}/invitations`
-- [ ] ST-T-306c: Member row has role dropdown (disabled if not owner)
-- [ ] ST-T-306d: Member row has remove button (disabled for self)
-- [ ] ST-T-306e: Vitest covers render + invite flow + role change
-- [ ] Vitest + lint + typecheck clean
+- [ ] Starter plan: 1 member only (inviting the 2nd fails with 403)
+- [ ] Growth plan: 3 members allowed
+- [ ] Team plan: 10 members allowed
+- [ ] Plan upgrade via webhook immediately raises the limit
+- [ ] Plan downgrade doesn't revoke existing memberships (just blocks
+  new ones until under the limit)
+
+**Estimated effort:** S
+
+---
+
+### T-405: Real Stripe adapter + webhook handler
+
+**Files:**
+- `backend/app/adapters/billing/real.py` (update — `StripeBillingAdapter`
+  implements all 4 methods using `stripe` Python SDK)
+- `backend/requirements.txt` (update — add `stripe==11.3.0`)
+- `backend/.env.example` (update — add `STRIPE_API_KEY`,
+  `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_*`)
+- `backend/tests/test_live_smoke.py` (update — add 1 live test for
+  real Stripe sandbox: create checkout session, verify URL format)
+- `backend/app/routers/billing.py` (update — in real mode, verify
+  webhook HMAC signature; in mock mode, accept unsigned payloads)
+
+**Description:**
+This is the production wiring. The real `StripeBillingAdapter`:
+- Uses `stripe.checkout.Session.create(...)` for `create_checkout_session`
+- Uses `stripe.billing_portal.Session.create(...)` for `create_portal_session`
+- Uses `stripe.Subscription.retrieve(...)` for `get_subscription`
+- Uses `stripe.Subscription.modify(..., cancel_at_period_end=True)` for cancel
+
+Webhook handler in real mode:
+- Verifies `Stripe-Signature` header against `STRIPE_WEBHOOK_SECRET` using
+  `stripe.Webhook.construct_event(payload, sig, secret)`
+- Returns 200 on success, 400 on bad signature, 500 on handler error
+
+**Why this is separate:** real Stripe integration requires a Stripe
+account (live or test). The cycle 1-4 strategy is mock-first; the
+real wiring can land without disrupting the test suite.
+
+**Acceptance criteria:**
+- [ ] Real adapter methods call Stripe SDK correctly
+- [ ] Webhook handler verifies Stripe HMAC signature
+- [ ] Test for `stripe.checkout.Session.create()` shape (MockTransport
+  against the SDK's underlying httpx client if possible)
+- [ ] Live smoke test creates a real Checkout session in Stripe test
+  mode (RUN_LIVE_BILLING=1)
+- [ ] CI stays green without Stripe keys
+
+**Estimated effort:** L (split into T-405a Stripe SDK wiring, T-405b webhook handler)
+
+---
+
+### T-406: Frontend /dashboard/billing page
+
+**Files:**
+- `web/lib/billing.ts` (new — typed API client wrapping the 4 endpoints)
+- `web/app/(app)/dashboard/billing/page.tsx` (new — pricing card,
+  current plan badge, "Manage billing" button → Stripe portal,
+  "Upgrade" CTA → plan picker)
+- `web/components/billing/PricingCard.tsx` (new — single plan card)
+- `web/components/billing/PlanPicker.tsx` (new — 3-plan toggle with
+  monthly USD prices)
+- `web/components/billing/UpgradeSuccessToast.tsx` (new — toast on
+  `?upgrade=success` query param)
+- `web/app/(app)/dashboard/leads/page.tsx` (update — header shows
+  plan badge)
+- `web/lib/api.ts` (update — adds BillingPlan enum + team plan helpers)
+
+**Description:**
+The billing page renders:
+- Current plan card (with seat usage: "2 / 3 members")
+- 3-plan toggle → click → opens Stripe Checkout (or stub in mock)
+- "Manage billing" → opens Stripe Customer Portal
+- Webhook-success toast on `?upgrade=success`
+
+Empty state: free plan (defaults), shows "Upgrade" CTA only.
+Loading state: skeleton + "Loading billing..."
+
+**Acceptance criteria:**
+- [ ] Page renders 3 pricing cards with correct monthly USD prices
+- [ ] Current plan highlighted
+- [ ] "Upgrade" CTA opens Stripe Checkout (or stub URL in mock)
+- [ ] "Manage billing" opens Stripe portal
+- [ ] Plan badge in dashboard header shows current plan
+- [ ] Webhook success toast on return from Stripe
+- [ ] Vitest render + interaction tests pass
 
 **Estimated effort:** M
 
 ---
 
-### T-307: Invite email mock + accept flow
+### T-407: Update test suite + docs/billing.md
 
 **Files:**
-- `backend/app/services/invitation_service.py` (new — generate_token,
-  send_invite_email, accept_invite)
-- `backend/app/routers/teams.py` (update — POST /api/teams/invitations/
-  {token}/accept)
-- `backend/app/adapters/email/base.py` (new — EmailAdapter Protocol)
-- `backend/app/adapters/email/mock.py` (new — logs to console)
-- `backend/app/adapters/email/factory.py` (new — factory)
-- `backend/app/config.py` (update — `frontend_url` for invite link)
-- `backend/tests/test_invitations.py` (new — token generation + accept
-  + expiry)
+- `backend/tests/conftest.py` (update — autouse reset of billing mock cache)
+- `backend/tests/test_billing.py` (update — add 2 tests:
+  plan-upgrade-via-webhook updates state, plan-limit guard respects
+  growth → team upgrade)
+- `backend/tests/test_live_smoke.py` (update — add Stripe sandbox test)
+- `docs/billing.md` (new — user-facing doc: how billing works, how
+  to upgrade, how to handle failed payments, how to cancel)
 
 **Description:**
-The invite flow needs an email-sending adapter (mock for dev, real
-for prod via Resend / SendGrid / SES in Cycle 4+). The accept flow
-validates the token, creates the user if they don't exist, adds them
-to the team, and returns a JWT.
+The cycle 4 test suite update + docs. The billing doc explains:
 
-**Why a separate task:** the email adapter is a new integration that
-should be tested in isolation before being wired to teams.
-
-**Acceptance criteria:**
-- [ ] ST-T-307a: Invite token is a secure random URL-safe string
-  (32+ bytes entropy)
-- [ ] ST-T-307b: Token expires after 7 days (configurable)
-- [ ] ST-T-307c: Mock `EmailAdapter.send()` logs the invite link to
-  the dev console; the link is `{frontend_url}/invite/{token}`
-- [ ] ST-T-307d: `POST /api/teams/invitations/{token}/accept`:
-  - Valid + unexpired → create user (if email doesn't exist) + add
-    to team + return JWT
-  - Invalid or expired → 400
-  - Already accepted → 410 Gone
-- [ ] ST-T-307e: User who accepts the invite is auto-logged-in
-  (returns the same shape as signup/login)
-
-**Estimated effort:** M
-
----
-
-### T-308: Update test suite + RLS smoke tests
-
-**Files:**
-- All existing `tests/test_*.py` (update — adapt to team-scoping)
-- `backend/tests/test_rls_smoke.py` (new — RUN_LIVE_SMOKE=1 only)
-- `docs/teams.md` (new — user-facing doc: how to invite teammates,
-  how teams work, what RLS guarantees)
-
-**Description:**
-The bulk of this task is updating the existing test suite to use
-team-scoping (T-304 cutover). Adds one live-smoke test that verifies
-RLS works on a real Supabase project.
+- Plan tiers (starter / growth / team) + limits
+- Per-seat billing model
+- How the upgrade flow works (Checkout → webhook → team.plan updated)
+- What happens on payment failure (status=`past_due`, email sent,
+  team can still log in but can't invite new members)
+- How to cancel (Stripe portal; status → `canceled` at period end)
+- How to switch from Stripe to manual billing (Cycle 5+ feature)
 
 **Acceptance criteria:**
-- [ ] All 230 existing tests pass with the team-scoping refactor
-- [ ] RLS smoke test creates 2 teams + 2 users + 1 property in
-  each, attempts cross-team read, asserts 0 rows visible
-- [ ] `docs/teams.md` explains: how to create a team, invite a member,
-  accept an invite, change roles, what the security model is
+- [ ] All cycle-1+2+3 tests still pass (no regressions)
+- [ ] Cycle-4 tests add ≥ 25 new (across T-401..T-406)
+- [ ] docs/billing.md explains plans, limits, payment failure, cancel
 - [ ] Coverage stays ≥ 80%
+- [ ] CI green without Stripe keys
 
 **Estimated effort:** M
 
@@ -398,31 +418,26 @@ RLS works on a real Supabase project.
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|------------|--------|------------|
-| RLS migration on existing data | M | H | Migration is additive (adds table, doesn't modify existing rows); user_id-scoped data continues to work for users with no team_id |
-| Breaking change to existing routers | H | M | All 184 existing tests will fail on first cutover; T-304 budgeted L to fix them in one pass |
-| Webhook team attribution | M | M | For MVP, single LINE OA per team (one-to-one); multi-OA-per-team is Cycle 5+ |
-| Email deliverability | L | L | Mock for now; real Resend/SendGrid integration in Cycle 4 |
-| Owner can't leave team | M | L | Document the workaround (delete team or transfer ownership); auto-transfer on delete in Cycle 4 |
-| RLS performance | L | M | Index on `team_id` already exists in 001_init.sql; if slow, add `USING (team_id = ...)` to use the index |
+| Stripe API costs (test mode is free) | L | M | Live smoke test uses Stripe **test mode** (no real charges). CI never hits Stripe. |
+| Webhook signature verification races | M | M | T-405 includes both happy-path (valid sig → 200) and bad-sig (401) tests. |
+| Plan-limit guard could lock out existing users on downgrade | L | H | Downgrade applies to NEW invites only; existing memberships are kept. Tested explicitly. |
+| Mock-first pattern divergence (mock accepts unsigned webhooks, real requires Stripe sig) | M | M | Both paths use the same handler code; only the verification flag differs. Tested both. |
+| Stripe SDK pinning (breaking changes between minor versions) | M | M | Pin `stripe==11.3.0`; document upgrade process in runbook. |
+| Billing state drift between mock + real | L | M | Same `billing_customers` table schema for both; mock implements the same methods. |
+| Cycle 4 is too big | M | M | T-405 split into T-405a (Stripe SDK) + T-405b (webhook). T-407 is just docs. |
 
 ---
 
-## Out of scope (deferred to Cycle 4+)
+## Out of scope (deferred to Cycle 5+)
 
-- **Per-seat billing** (charge per active member)
-- **Audit log UI** (who changed what when — schema exists in
-  `001_init.sql` as `audit_logs`)
-- **Granular roles** (per-resource ACL like "can edit but not delete")
-- **Team-scoped LINE OA** (one channel per team, not per agent)
-- **Team ownership transfer** (hand over to another member)
-- **Real email service** (Resend / SendGrid / SES)
-- **Team deletion** (cascade archive + reassign)
-- **Production-grade observability** (Sentry, OpenTelemetry)
-- **CRM analytics** (conversion funnels per team)
-- **i18n beyond Thai + English**
-- **Mobile app, native LINE Flex Messages**
-- **Contract generation / e-signature / PDF export**
-- **Google Calendar two-way sync**
+- Stripe Tax / promo codes / annual pricing
+- Per-property billing (we ship per-seat only)
+- Stripe Connect (multi-tenant payouts)
+- Plan downgrade refunds (Stripe handles, we just mirror status)
+- Audit log UI for billing events (the `audit_logs` table already exists)
+- Real-time quota metering (current = count on invite, not usage)
+- Self-service plan picker upgrades (only via Stripe Checkout for now)
+- Multi-currency support (USD only)
 
 ---
 
@@ -430,7 +445,7 @@ RLS works on a real Supabase project.
 
 - `pytest -q --cov=app --cov-fail-under=80` (real adapters excluded
   from coverage as before)
-- `ruff check + ruff format --check` clean
+- `ruff + ruff format --check` clean
 - `mypy app/` strict, 0 errors
 - Frontend: `npm run lint + typecheck + vitest` clean
 
@@ -440,16 +455,15 @@ RLS works on a real Supabase project.
 
 | Task | Effort |
 |------|--------|
-| T-301 | M |
-| T-302 | M |
-| T-303 | S/M |
-| T-304 | L (8+ routers, 6+ test files — biggest task) |
-| T-305 | M |
-| T-306 | M |
-| T-307 | M |
-| T-308 | M |
+| T-401 | S |
+| T-402 | S |
+| T-403 | M |
+| T-404 | S |
+| T-405 | L (split) |
+| T-406 | M |
+| T-407 | M |
 | **Total** | **~7–10 days of focused work** |
 
 ---
 
-_Updated: 2026-07-04T01:20:00Z — Cycle 3 plan drafted, pending user approval._
+_Updated: 2026-07-04T04:55:00Z — Cycle 4 plan drafted, pending user approval._
