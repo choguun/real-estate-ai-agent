@@ -6,10 +6,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 
 from app.adapters.supabase import SupabaseAdapter
-from app.deps import CurrentUserIdDep, DBDep, EmailDep
+from app.deps import CurrentUserIdDep, DBDep, EmailDep, RateLimiterDep
 from app.domain.team import (
     InvitationAcceptIn,
     InvitationAcceptOut,
@@ -98,11 +99,44 @@ def list_team_members(
 def invite_member(
     team_id: UUID,
     payload: InvitationCreate,
+    request: Request,
     user_id: CurrentUserIdDep,
     supabase: DBDep,
     email_svc: EmailDep,
-) -> InvitationOut:
-    """Owner invites a teammate by email. Sends an email with the invite link."""
+    rl: RateLimiterDep,
+) -> InvitationOut | JSONResponse:
+    """Owner invites a teammate by email. Sends an email with the invite link.
+
+    Cycle 6 T-603: rate-limit per owner (not per IP — owner is
+    authenticated and may be on a moving IP). 20 invites / hr.
+    """
+    # Cycle 6 T-603: per-owner rate-limit on invitation creation.
+    rl_result = rl.allow(
+        key=f"team:{team_id}:owner:{user_id}",
+        action="team.invite",
+    )
+    if not rl_result.allowed:
+        from app.audit_log import ACTION_INVITE_RATE_LIMITED, record_rate_limited
+
+        fwd = request.headers.get("x-forwarded-for")
+        ip = fwd.split(",")[0].strip() if fwd else None
+        if not ip and request.client:
+            ip = request.client.host
+        ua = request.headers.get("user-agent")
+        record_rate_limited(
+            supabase,
+            ip=ip,
+            action="team.invite",
+            limit=rl_result.limit,
+            user_agent=ua,
+            event_action=ACTION_INVITE_RATE_LIMITED,
+        )
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "rate limit exceeded"},
+            headers={"Retry-After": str(rl_result.retry_after)},
+        )
+
     role = user_role_in_team(supabase, user_id=UUID(user_id), team_id=team_id)
     if role != "owner":
         raise HTTPException(status_code=403, detail="only owners can invite")
@@ -163,6 +197,7 @@ def invite_member(
 def accept_invitation(
     token: str,
     payload: InvitationAcceptIn,
+    request: Request,
     supabase: DBDep,
 ) -> InvitationAcceptOut:
     """ST-MT-09: Accept an invite — creates user (if new) + adds to team + returns JWT."""
@@ -262,6 +297,22 @@ def accept_invitation(
 
     settings = get_settings()
     access_token = create_access_token(str(user_id), email, settings=settings)
+
+    # T-503: emit audit row (best-effort — write_event swallows errors)
+    from app.audit_log import record_accept_invite
+
+    fwd = request.headers.get("x-forwarded-for")
+    ip = fwd.split(",")[0].strip() if fwd else None
+    if not ip and request.client:
+        ip = request.client.host
+    ua = request.headers.get("user-agent")
+    record_accept_invite(
+        supabase,
+        user_id=str(user_id),
+        team_id=str(team_id),
+        ip=ip,
+        user_agent=ua,
+    )
 
     return InvitationAcceptOut(
         access_token=access_token,

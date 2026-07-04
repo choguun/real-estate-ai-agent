@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 
-from app.deps import DBDep, SettingsDep
+from app.deps import DBDep, RateLimiterDep, SettingsDep
 from app.domain.user import AuthResponse, LiffIn, LoginIn, SignupIn, User
 from app.services.auth import (
     AuthError,
@@ -54,33 +55,112 @@ def _map_auth_error(exc: Exception) -> HTTPException:
 
 
 # ─── Endpoints ──────────────────────────────────────────────────────────
+def _client_metadata(request: Request) -> tuple[str | None, str | None]:
+    """Pull the client IP + User-Agent for audit logging.
+
+    Prefers the first hop of X-Forwarded-For (typical for Railway /
+    Vercel / nginx in front of the app); falls back to the
+    underlying socket address. Both are best-effort; the audit row
+    uses `None` if neither is present.
+    """
+    ip: str | None = None
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        ip = fwd.split(",")[0].strip()
+    elif request.client and request.client.host:
+        ip = request.client.host
+    ua = request.headers.get("user-agent")
+    return ip, ua
+
+
 @router.post("/signup", response_model=AuthResponse, status_code=201)
-def signup(payload: SignupIn, svc: AuthServiceDep) -> dict[str, object]:
+def signup(
+    payload: SignupIn,
+    request: Request,
+    svc: AuthServiceDep,
+    rl: RateLimiterDep,
+    db: DBDep,
+) -> dict[str, object] | JSONResponse:
+    # Cycle 6 T-602: per-IP rate-limit on signup to prevent scripted
+    # account-creation / enumeration probing.
+    ip, ua = _client_metadata(request)
+    rl_result = rl.allow(key=str(ip or "unknown"), action="auth.signup")
+    if not rl_result.allowed:
+        from app.audit_log import record_rate_limited
+
+        record_rate_limited(
+            db,
+            ip=ip,
+            action="auth.signup",
+            limit=rl_result.limit,
+            user_agent=ua,
+        )
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "rate limit exceeded"},
+            headers={"Retry-After": str(rl_result.retry_after)},
+        )
     try:
         return svc.signup(
             email=payload.email,
             full_name=payload.full_name,
             password=payload.password,
+            ip=ip,
+            user_agent=ua,
         )
     except Exception as exc:
         raise _map_auth_error(exc) from exc
 
 
 @router.post("/login", response_model=AuthResponse)
-def login(payload: LoginIn, svc: AuthServiceDep) -> dict[str, object]:
-    # TODO(security): add a rate limiter (e.g. slowapi, Redis counter) before
-    # any non-dev exposure. Today /api/auth/login is brute-forceable.
+def login(
+    payload: LoginIn,
+    request: Request,
+    svc: AuthServiceDep,
+    rl: RateLimiterDep,
+    db: DBDep,
+) -> dict[str, object] | JSONResponse:
+    # Cycle 6 T-602: per-IP rate-limit on login to prevent brute-force.
+    ip, ua = _client_metadata(request)
+    rl_result = rl.allow(key=str(ip or "unknown"), action="auth.login")
+    if not rl_result.allowed:
+        from app.audit_log import record_rate_limited
+
+        record_rate_limited(
+            db,
+            ip=ip,
+            action="auth.login",
+            limit=rl_result.limit,
+            user_agent=ua,
+        )
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "rate limit exceeded"},
+            headers={"Retry-After": str(rl_result.retry_after)},
+        )
     try:
-        return svc.login(email=payload.email, password=payload.password)
+        return svc.login(
+            email=payload.email,
+            password=payload.password,
+            ip=ip,
+            user_agent=ua,
+        )
     except Exception as exc:
         raise _map_auth_error(exc) from exc
 
 
 @router.post("/liff", response_model=AuthResponse)
-def liff(payload: LiffIn, svc: AuthServiceDep) -> dict[str, object]:
+def liff(
+    payload: LiffIn,
+    request: Request,
+    svc: AuthServiceDep,
+) -> dict[str, object] | JSONResponse:
+    ip, ua = _client_metadata(request)
     return svc.liff_login(
         line_user_id=payload.line_user_id,
         display_name=payload.display_name,
+        ip=ip,
+        user_agent=ua,
     )
 
 
@@ -88,7 +168,7 @@ def liff(payload: LiffIn, svc: AuthServiceDep) -> dict[str, object]:
 def me(
     svc: AuthServiceDep,
     authorization: Annotated[str | None, Header()] = None,
-) -> dict[str, object]:
+) -> dict[str, object] | JSONResponse:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED,

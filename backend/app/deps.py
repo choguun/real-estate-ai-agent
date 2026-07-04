@@ -22,6 +22,7 @@ from app.adapters.storage.base import StorageAdapter
 from app.adapters.supabase._factory import get_db
 from app.adapters.supabase.base import SupabaseAdapter
 from app.config import Settings, get_settings
+from app.rate_limit import RateLimiter
 from app.services.auth import decode_token
 from app.services.team_service import get_user_team
 
@@ -149,3 +150,19 @@ def get_current_team(
 
 
 CurrentTeamIdDep = Annotated[str, Depends(get_current_team)]
+
+
+# ─── Cycle 6 T-601: Rate limiter DI ───────────────────────────────
+def get_rate_limiter_dep() -> RateLimiter:
+    """Resolve the cached RateLimiter singleton.
+
+    Routers that want rate-limiting do `rl: RateLimiterDep` in their
+    signature. Tests that need a fresh limiter call
+    `rate_limit_factory.reset_cache()` in a fixture.
+    """
+    from app.rate_limit_factory import get_rate_limiter
+
+    return get_rate_limiter()
+
+
+RateLimiterDep = Annotated[RateLimiter, Depends(get_rate_limiter_dep)]

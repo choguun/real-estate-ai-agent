@@ -73,6 +73,7 @@ class Settings(BaseSettings):
     ai_provider: str = "anthropic"
 
     jwt_secret: str = "dev-jwt-secret-change-me"
+    jwt_secret_previous: str = ""  # cycle 6 T-604: rollover window
     jwt_algorithm: str = "HS256"
     jwt_alg: str = "HS256"
     var_dir: str = "var"
@@ -90,6 +91,41 @@ class Settings(BaseSettings):
     stripe_price_team: str = ""
 
     cors_origins: list[str] = ["*"]
+
+    # ── Cycle 6 T-601 rate-limit policies ──
+    # Override these via env to tighten or relax per environment.
+    # Defaults: 5 login attempts / 15min per IP, 5 signups / hr per
+    # IP (anti-enumeration), 20 invitations / hr per owner.
+    rate_limit_login_per_15min: int = 5
+    rate_limit_signup_per_hour: int = 5
+    rate_limit_invite_per_hour: int = 20
+
+    # ── Cycle 5 T-501 fail-fast validators ──
+    # Call `settings.validate_security()` after construction (or from
+    # `create_app()`) to ensure non-dev deployments don't ship with
+    # insecure defaults. See `app/security_validation.py`.
+
+    def validate_security(self) -> None:
+        """Run all security validators. Raises ValueError on failure.
+
+        Named `validate_security` (not `validate`) because Pydantic's
+        BaseModel already defines a classmethod `validate` with a
+        different signature; overriding would break Pydantic.
+        """
+        # Imported here to avoid a circular import at module-load time.
+        from app.security_validation import (
+            validate_cors_origins,
+            validate_jwt_secret,
+            validate_jwt_secret_previous,
+            validate_line_channel_secret,
+            validate_stripe_api_key,
+        )
+
+        validate_jwt_secret(self.jwt_secret, env=self.env)
+        validate_jwt_secret_previous(self.jwt_secret_previous, env=self.env)
+        validate_cors_origins(self.cors_origins, env=self.env)
+        validate_line_channel_secret(self.line_channel_secret, env=self.env)
+        validate_stripe_api_key(self.stripe_api_key, use_mocks=self.use_mocks, env=self.env)
 
 
 @lru_cache(maxsize=1)
