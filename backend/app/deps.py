@@ -11,6 +11,8 @@ from fastapi import Depends, Header, HTTPException, Request, status
 
 from app.adapters.ai._factory import build_ai_chain
 from app.adapters.ai.base import AiAdapter
+from app.adapters.billing import build_billing_adapter
+from app.adapters.billing.base import BillingAdapter
 from app.adapters.email import build_email_adapter
 from app.adapters.email.base import EmailAdapter
 from app.adapters.line._factory import get_line_adapter
@@ -74,6 +76,14 @@ def get_email() -> EmailAdapter:
 
 
 EmailDep = Annotated[EmailAdapter, Depends(get_email)]
+
+
+def get_billing() -> BillingAdapter:
+    """Per-request billing adapter (mock unless use_mocks=false)."""
+    return build_billing_adapter()
+
+
+BillingDep = Annotated[BillingAdapter, Depends(get_billing)]
 
 
 def get_current_user_id(

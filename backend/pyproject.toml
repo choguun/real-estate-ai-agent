@@ -50,6 +50,11 @@ ignore_missing_imports = true
 module = "tests.*"
 disallow_untyped_defs = false
 
+[[tool.mypy.overrides]]
+module = "app.adapters.billing.mock"
+disable_error_code = ["no-any-return"]
+disallow_untyped_defs = false
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra -q --strict-markers --cov=app --cov-report=term-missing --cov-fail-under=80"

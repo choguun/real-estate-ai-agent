@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import Settings, get_settings
 from app.routers.ai import router as ai_router
 from app.routers.auth import router as auth_router
+from app.routers.billing import router as billing_router
 from app.routers.dashboard import router as dashboard_router
 from app.routers.health import router as health_router
 from app.routers.leads import router as leads_router
@@ -77,6 +78,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(messages_router)
     app.include_router(dashboard_router)
     app.include_router(teams_router)
+    app.include_router(billing_router)
     return app
 
 

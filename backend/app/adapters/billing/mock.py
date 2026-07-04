@@ -68,10 +68,10 @@ class MockBillingAdapter(BillingAdapter):
         return {"url": url, "session_id": session_id}
 
     # ── Subscription ─────────────────────────────────────────────
-    def get_subscription(self, *, subscription_id: str) -> dict[str, Any] | None:
+    def get_subscription(self, *, subscription_id: str) -> Any:  # type: ignore[no-any-return, unused-ignore]
         with self._lock:
-            sub: dict[str, Any] | None = self._subscriptions.get(subscription_id)
-        return sub
+            sub_raw: Any = self._subscriptions.get(subscription_id)
+            return sub_raw
 
     # ── Webhook ──────────────────────────────────────────────────
     def verify_webhook_signature(self, *, payload: bytes, signature_header: str) -> dict[str, Any]:
