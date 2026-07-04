@@ -1,48 +1,42 @@
-# Plan: AIDLC Cycle 4 — Per-Seat Billing + Stripe Webhooks
+# Plan: AIDLC Cycle 5 — Security Hardening
 
-> **Status:** DRAFT (proposal; pending user approval)
+> **Status:** implementing (pending approval)
 > **Date:** 2026-07-04
-> **Branch (proposed):** `feat/billing-stripe`
-> **Source brief:** spec's "Out of Scope (Cycle 3)" explicitly called out
-> "per-seat billing (charge per active member)". Cycle 3 gave us the
-> team model; this cycle gives it a price tag.
+> **Branch:** `feat/security-hardening`
+> **Source brief:** `.aidlc/spec.md` (spec's "Deferred to cycle 5" + audit log)
+> **Spec acceptance criteria:** 13 ACs (AC-SEC-01..13)
+> **Spec open questions:** 5 (all recommendations logged in spec)
 
 ---
 
 ## Why this cycle
 
-The Month-1 MVP (PR #1) + cycle 2 (real adapters, PR #3) + cycle 3
-(multi-tenant teams, PR #4) give us:
+Cycle 4 shipped with three **silent footguns** the post-cycle review
+flagged as P0 / C3:
 
-- A working real-estate SaaS that agents can deploy in production
-- A team model where 1-5 agents share a property pool
-- Cross-team isolation (mock + Supabase RLS)
+1. `JWT_SECRET=dev-jwt-secret-change-me` is accepted at startup → a
+   misconfigured prod deploy signs every user with a public secret.
+2. `CORS_ORIGINS=["*"]` is the default → any browser anywhere can call
+   authenticated endpoints in production.
+3. `LINE_CHANNEL_SECRET=dev-...-change-me` ships with the same trap.
 
-What's missing: **a price tag.** Cycle 4 closes that gap by adding
-the Stripe integration that turns the team model into a monetizable
-SaaS. Without this cycle:
+Plus two cycle-5 scope additions:
 
-- The product cannot charge for usage
-- The "team plan: starter / growth / team" column on `teams` is
-  cosmetic (set on creation but never read)
-- New operators have no way to upgrade to a paid plan
-- The team owner cannot invite more than ~5 agents before needing
-  manual billing UX
+4. **No audit log** — security incidents have no breadcrumbs (who
+   logged in, when, from where; failed attempts; permission denials).
+5. **RLS write-path gaps** — `team_invitations`, `team_memberships`,
+   `billing_customers` only allow service-role writes; team members
+   can't update their own records via Supabase anon auth.
 
-This cycle lights up the billing loop end-to-end: plan selection at
-signup, Stripe Checkout for upgrades, webhook for plan changes,
-member-count enforcement (per-seat limit), and an in-app Billing
-page.
+Without this cycle, the product cannot:
+- Catch a misconfigured production deploy at startup
+- Investigate a security incident ("who logged in as alice yesterday?")
+- Pass an enterprise security review (no audit log + write-path RLS gaps)
+- Rotate the JWT secret without logging every user out
 
-The pricing model:
-
-| Plan | Members included | Monthly price (USD) | Properties | AI listings/mo |
-|------|------------------|---------------------|-------------|------------------|
-| `starter` | 1 | $0 (free) | 5 | 20 |
-| `growth` | 3 | $29 | 25 | 200 |
-| `team` | 10 | $99 | 100 | 1,000 |
-
-`enterprise` is a follow-up (custom contract).
+This cycle **fail-fasts on insecure defaults**, adds an **append-only
+audit log** for sensitive events, and **closes the RLS write-path
+gaps** so team members can self-manage via Supabase anon auth.
 
 ---
 
@@ -51,419 +45,421 @@ The pricing model:
 When this cycle ships, an operator can:
 
 ```bash
-# 1. Sign up → land on /pricing → click "Upgrade to Growth"
-# 2. Stripe Checkout opens, returns to /dashboard/billing?upgrade=success
-# 3. Webhook updates team.plan = 'growth' (mock in dev: button click)
-# 4. The /api/billing/portal opens Stripe's customer portal
-# 5. /api/billing/seats returns {plan, members_used, members_limit, status}
-# 6. Enforce: can't invite a 4th member on the Growth plan (plan limit)
-# 7. Live smoke w/ Stripe test mode (RUN_LIVE_BILLING=1) verifies
-#    checkout-session creation + webhook handling
+# 1. Deploy with bad config → app refuses to start
+ENV=production JWT_SECRET=dev-jwt-secret-change-me uvicorn app.main:app
+# → ValueError: JWT_SECRET is set to the default value; refusing to start
+
+# 2. Deploy with valid config → app starts, audit log captures activity
+ENV=production JWT_SECRET=$(openssl rand -base64 48) uvicorn app.main:app
+# → started; POST /api/auth/login → row in security_events
+
+# 3. Investigate a security incident
+psql -c "SELECT actor_id, action, ip, success, created_at
+         FROM security_events
+         WHERE action='auth.login' AND success=false
+         ORDER BY created_at DESC LIMIT 20"
+
+# 4. Rotate JWT secret without logging everyone out
+#    (covered in docs/security.md: dual-verify window + revocation list)
+
+# 5. Team member updates their own profile via Supabase anon auth
+#    (RLS write policy allows team_id=self)
 ```
 
-…with zero router code changes to existing endpoints (only the team
-invitation router gets a plan-limit guard).
+…with **zero changes to existing router business logic** (security is
+additive: validators, audit hooks, RLS policies).
 
 ---
 
 ## Non-goals (still out of scope after this cycle)
 
-- **Stripe Tax** (auto tax calculation) — manual for MVP
-- **Coupons / promo codes** — Cycle 5+
-- **Annual pricing** — Cycle 5+
-- **Per-property billing** — flat per-seat only
-- **Stripe Connect / multi-tenant payouts** — single vendor MVP
-- **Plan downgrade refunds** — handled by Stripe, we just mirror status
-- **Audit log UI for billing events** — Cycle 5+ (the table exists)
+- **MFA / 2FA / WebAuthn** — cycle 6+
+- **Rate limiting** — cycle 6 (`slowapi` or Redis token bucket)
+- **Secret rotation tooling** — cycle 6 (one-shot JWT secret rollover)
+- **SOC2 / ISO 27001 controls** — out of product scope
+- **OAuth provider integration** — out of scope (email/password only)
+- **Front-end security headers** (CSP, HSTS) — cycle 6 (web-owned)
+- **GDPR data export / right-to-delete** — cycle 7
+- **Penetration testing** — separate engagement
 
 ---
 
 ## Strategy
 
-7 vertical slices. Foundation (T-401 to T-403) is mock-first and ships
-without any external account. T-404 turns on RLS-style enforcement on
-team-scoped counts. T-405 is the real Stripe wiring (httpx-based).
-T-406 adds the in-app Billing page. T-407 updates tests + docs.
+5 vertical slices. Foundation (T-501 fail-fast validators) is the
+table-stakes — without it, the other tasks' audit events could ship
+into a misconfigured prod. T-502 (audit infra) is the second
+foundation. T-503 wires audit into existing endpoints. T-504 closes
+RLS gaps. T-505 is docs + final verification.
 
 ```dot
-digraph cycle4 {
-    T-401 [label="T-401: Plan schema + billing customers table"];
-    T-402 [label="T-402: BillingAdapter Protocol + mock"];
-    T-403 [label="T-403: /api/billing/* routes (mocked Stripe)"];
-    T-404 [label="T-404: Plan-limit guard on invitations"];
-    T-405 [label="T-405: Real Stripe adapter + webhook handler"];
-    T-406 [label="T-406: Frontend /dashboard/billing page"];
-    T-407 [label="T-407: Update test suite + docs/billing.md"];
+digraph cycle5 {
+    T-501 [label="T-501: Settings fail-fast validators"];
+    T-502 [label="T-502: Audit log infra (table + service + model)"];
+    T-503 [label="T-503: Audit hooks in auth + teams + billing"];
+    T-504 [label="T-504: RLS write-path policies"];
+    T-505 [label="T-505: docs/security.md + final verify"];
 
-    T-401 -> T-402;
-    T-402 -> T-403;
-    T-403 -> T-404;
-    T-404 -> T-405;
-    T-405 -> T-406;
-    T-403 -> T-406;
-    T-406 -> T-407;
-    T-404 -> T-407;
+    T-501 -> T-503;
+    T-502 -> T-503;
+    T-503 -> T-504;
+    T-503 -> T-505;
+    T-504 -> T-505;
 }
 ```
 
-**Parallelism:** T-403 (mock routes) and T-406 (frontend) can run in
-parallel after T-402 lands. T-404 needs T-403. T-405 needs T-403.
+**Parallelism:** T-501 (validators) and T-502 (audit infra) can run in
+parallel after the spec lands — neither depends on the other. T-503
+needs both. T-504 only needs T-503's audit-hook patterns as a
+template. T-505 runs last (docs the whole thing).
 
 ---
 
 ## Tasks
 
-### T-401: Plan schema + billing customers table
+### T-501: Settings fail-fast validators (JWT, CORS, LINE, Stripe)
 
 **Files:**
-- `backend/migrations/003_billing.sql` (new — `billing_customers` table
-  mapping `team_id → stripe_customer_id`, plus indexes)
-- `backend/app/adapters/supabase/_schema.py` (update — add
-  `BILLING_CUSTOMERS` table)
-- `backend/app/adapters/supabase/mock.py` (no change — the mock handles
-  any table in the schema)
-- `backend/tests/adapters/test_billing_schema.py` (new — 4 tests
-  covering table presence + UNIQUE on team_id)
+- `backend/app/security_validation.py` (new — pure validator functions)
+- `backend/app/config.py` (modify — add `Settings.validate()` method that
+  runs all validators on construction)
+- `backend/app/main.py` (modify — `create_app()` calls
+  `settings.validate()` before `FastAPI(...)` instantiation)
+- `backend/tests/test_security_validation.py` (new — 12 unit tests
+  covering every validator branch)
 
 **Description:**
-The schema-mirror pattern from cycles 1+3 continues. We add one new
-table:
+The cycle-4 C3 critical. Every secret + CORS config that has a
+"default that ships silently" gets a validator that raises
+`ValueError` in non-dev environments. Validators are pure functions
+(testable in isolation) so they don't require a FastAPI app to test.
 
-```sql
-CREATE TABLE billing_customers (
-    team_id UUID PRIMARY KEY REFERENCES teams(id) ON DELETE CASCADE,
-    stripe_customer_id TEXT UNIQUE,
-    stripe_subscription_id TEXT,
-    plan TEXT NOT NULL DEFAULT 'starter' CHECK (plan IN ('starter', 'growth', 'team', 'enterprise')),
-    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('trialing', 'active', 'past_due', 'canceled')),
-    current_period_end TIMESTAMPTZ,
-    cancel_at_period_end BOOLEAN DEFAULT false,
-    created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now()
-);
-```
-
-The `plan` field on `teams` (already there) is kept in sync with the
-billing record's `plan` via the `update_team` mock method.
-
-**Why this is the foundation:** everything else reads billing state,
-so the table has to exist first.
-
-**Acceptance criteria:**
-- [ ] `migrations/003_billing.sql` declares `billing_customers`
-- [ ] `BILLING_CUSTOMERS` Table added to `_schema.py`
-- [ ] `test_sql_matches_mock_schema_tables` still passes
-- [ ] `UNIQUE(stripe_customer_id)` enforces one-team-per-customer
-- [ ] 4 new tests: insert/get/update + cross-team isolation
-
-**Estimated effort:** S
-
----
-
-### T-402: BillingAdapter Protocol + mock
-
-**Files:**
-- `backend/app/adapters/billing/base.py` (new — `BillingAdapter` Protocol
-  with `create_checkout_session`, `create_portal_session`,
-  `get_subscription`, `cancel_subscription`)
-- `backend/app/adapters/billing/mock.py` (new — `MockBillingAdapter`
-  that creates local "checkout sessions" returning a stub URL, signs
-  no-op "webhooks", records every call for assertions)
-- `backend/app/adapters/billing/real.py` (new — `StripeBillingAdapter`
-  stub that raises `NotImplementedError` on every method)
-- `backend/app/adapters/billing/factory.py` (new — `build_billing_adapter(settings)`)
-- `backend/app/adapters/billing/__init__.py` (new — public re-exports)
-- `backend/tests/adapters/test_real_billing.py` (new — Protocol compliance)
-- `backend/tests/adapters/test_mock_billing.py` (new — 6 tests covering
-  checkout creation, portal session, idempotency, error mapping)
-
-**Description:**
-Just like the email / LINE / Supabase adapters, we add a
-`BillingAdapter` Protocol so the rest of the app never imports a
-specific SDK. The mock-first approach means:
-
-- Mock records every `create_*` call in-memory
-- Mock returns `https://billing-mock.example.com/checkout/{token}` URLs
-- Real adapter is a thin httpx wrapper around the Stripe SDK (in
-  T-405); it raises NotImplementedError until then.
-
-**Why this is separate from T-403:** the adapter is the dependency
-that the routes call into. Building it in isolation means the routes
-can be tested without the implementation.
-
-**Acceptance criteria:**
-- [ ] `BillingAdapter` Protocol with 4 methods
-- [ ] `MockBillingAdapter` records all calls + returns stub URLs
-- [ ] `StripeBillingAdapter` raises NotImplementedError
-- [ ] `build_billing_adapter(settings)` returns mock when `use_mocks=true`
-- [ ] 6 mock tests + 1 Protocol compliance test
-- [ ] 80% coverage maintained
-
-**Estimated effort:** S
-
----
-
-### T-403: /api/billing/* routes (mocked Stripe)
-
-**Files:**
-- `backend/app/domain/billing.py` (new — `CheckoutRequest`, `BillingSessionOut`,
-  `BillingStatusOut`, `PlanInfo` DTOs)
-- `backend/app/services/billing_service.py` (new — `start_checkout`,
-  `handle_webhook_event`, `sync_subscription_status` — mock-aware,
-  records every Stripe call)
-- `backend/app/routers/billing.py` (new — `GET /api/billing/status`,
-  `POST /api/billing/checkout`, `POST /api/billing/portal`,
-  `POST /api/billing/webhook`)
-- `backend/app/main.py` (update — register billing router)
-- `backend/app/deps.py` (update — `BillingDep`)
-- `backend/tests/test_billing.py` (new — 7 tests covering status,
-  checkout session creation, portal session, webhook signature
-  verification, plan sync)
-
-**Description:**
-The routes:
-- `GET /api/billing/status` — returns `{plan, status, seats_used,
-  seats_limit, period_end, ...}` for the caller's team
-- `POST /api/billing/checkout` — creates a Stripe Checkout session +
-  returns `{url, session_id}` (mock in dev: returns a stub URL)
-- `POST /api/billing/portal` — creates a Stripe Customer Portal session
-- `POST /api/billing/webhook` — verifies Stripe signature, dispatches
-  events (in dev: no signature check, just stores the event in mock)
-
-**Webhook events handled:**
-- `checkout.session.completed` → upgrade team plan
-- `customer.subscription.created` → mark team as subscribed
-- `customer.subscription.updated` → sync plan / status
-- `customer.subscription.deleted` → revert to starter
-- `invoice.payment_failed` → set status=`past_due`, send email
-
-**Why mocking the webhook is safe:** the real Stripe webhook flow
-is identical to the mock — the only difference is the SDK call. Tests
-use the same code path; only the SDK changes.
-
-**Acceptance criteria:**
-- [ ] `GET /api/billing/status` returns team plan + seat counts
-- [ ] `POST /api/billing/checkout` returns `{url, session_id}`
-- [ ] `POST /api/billing/portal` returns `{url, session_id}`
-- [ ] `POST /api/billing/webhook` verifies HMAC-SHA256 signature in
-  real mode (Stripe Webhook Signing Secret); in mock mode accepts
-  any payload (signed dev payloads are accepted for testing)
-- [ ] Plan state survives across requests (mock state is in-memory)
-- [ ] 7 tests cover all routes
-
-**Estimated effort:** M
-
----
-
-### T-404: Plan-limit guard on invitations
-
-**Files:**
-- `backend/app/services/plan_limits.py` (new — `get_seat_limit(plan)`,
-  `assert_can_invite(team)` raises `PlanLimitExceeded`)
-- `backend/app/routers/teams.py` (update — invitation endpoint enforces
-  seat limit; `403 PlanLimitExceeded` if over)
-- `backend/tests/test_team_members.py` (update — add 2 tests:
-  free plan limit + upgrade after Stripe completes)
-- `backend/tests/test_billing.py` (new test — plan-limit guard fires
-  on the right plan)
-
-**Description:**
-Wire the billing state into the existing invitation flow. The
-`assert_can_invite` check is called inside `invite_member` AFTER the
-"already a member" check but BEFORE the email send:
+Each validator follows the same shape:
 
 ```python
-def invite_member(team_id, payload, user_id, supabase, email_svc):
-    if not user_is_member:  # cycle 3
-        raise 403
-    if user_already_member:  # cycle 3
-        raise 409
-    from app.services.plan_limits import assert_can_invite
-    assert_can_invite(supabase, team_id)  # NEW (T-404)
-    ...
+def validate_xxx(value: str, env: str) -> None:
+    """Raise ValueError if `value` is unsafe for `env`."""
+    if env in ("dev", "test"):
+        # dev/test: explicit "dev-" prefix is the override
+        if value.startswith("dev-") or value == "":
+            return
+    if value == "<default>":
+        raise ValueError(...)
+    if len(value.encode("utf-8")) < MIN_BYTES:
+        raise ValueError(...)
 ```
 
-**Why a separate task:** this is the "billing affects product
-behavior" hook. Once this lands, inviting more members than the plan
-allows becomes a 403 (instead of silently creating a team that
-overruns the plan).
+Validators implemented:
+- `validate_jwt_secret(value, env)` — default rejected, <32 bytes rejected
+- `validate_cors_origins(origins, env)` — `["*"]` rejected in prod
+- `validate_line_channel_secret(value, env)` — default rejected
+- `validate_stripe_api_key(value, use_mocks, env)` — placeholder
+  rejected when `USE_MOCKS=false`
 
-**Acceptance criteria:**
-- [ ] Starter plan: 1 member only (inviting the 2nd fails with 403)
-- [ ] Growth plan: 3 members allowed
-- [ ] Team plan: 10 members allowed
-- [ ] Plan upgrade via webhook immediately raises the limit
-- [ ] Plan downgrade doesn't revoke existing memberships (just blocks
-  new ones until under the limit)
+`Settings.validate()` runs all four validators. `create_app()` calls
+`settings.validate()` before constructing `FastAPI(...)` so a bad
+deploy exits before binding to a port.
+
+**Acceptance criteria (spec references):**
+- [ ] AC-SEC-01: `ENV=production` + `JWT_SECRET=dev-jwt-secret-change-me`
+      → raises before `FastAPI(...)` runs
+- [ ] AC-SEC-02: `ENV=production` + `JWT_SECRET` < 32 bytes → raises
+      with message including byte count
+- [ ] AC-SEC-03: `ENV=dev` + `JWT_SECRET=dev-jwt-secret-change-me` →
+      succeeds (dev override)
+- [ ] AC-SEC-04: `ENV=production` + `CORS_ORIGINS=["*"]` → raises
+- [ ] AC-SEC-05: `ENV=production` + `LINE_CHANNEL_SECRET=dev-...-change-me`
+      → raises
+- [ ] AC-SEC-06: `ENV=production` + `USE_MOCKS=false` +
+      `STRIPE_API_KEY=sk_test_placeholder` → raises
+- [ ] All 12 validator tests pass + 302 existing tests still pass
+
+**Test approach:**
+- Unit tests: 12 in `tests/test_security_validation.py`, one per
+  validator branch (default, empty, short, dev-override, env-bound).
+- Integration: 1 test in `tests/test_security_validation.py` that
+  calls `Settings(env="production", jwt_secret="dev-...").validate()`
+  and asserts the exception.
+- Regression: full suite green.
+
+**Estimated effort:** M
+
+---
+
+### T-502: Audit log infrastructure (table + service + model)
+
+**Files:**
+- `backend/migrations/004_security_events.sql` (new — `security_events`
+  table + RLS append-only policy)
+- `backend/app/domain/security.py` (new — `AuditEvent` pydantic model)
+- `backend/app/audit_log.py` (new — `write_event(adapter, event)`
+  best-effort helper + `record_login_success`, `record_login_failure`,
+  `record_signup`, `record_accept_invite` helpers)
+- `backend/app/adapters/supabase/_schema.py` (modify — add
+  `SECURITY_EVENTS` table)
+- `backend/tests/test_audit_log.py` (new — 6 unit + integration tests)
+
+**Description:**
+The append-only audit log infrastructure. The table is schema-mirrored
+into the mock adapter (cycle-1+3+4 pattern continues). Writes are
+**best-effort**: a failure to insert an audit row logs to stderr but
+does NOT 500 the primary request.
+
+Schema:
+
+```sql
+CREATE TABLE security_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    actor_id UUID REFERENCES users(id) ON DELETE SET NULL,  -- NULL = anonymous
+    action TEXT NOT NULL,                                    -- e.g. 'auth.login'
+    target_id UUID,                                          -- resource acted on
+    ip TEXT,                                                 -- X-Forwarded-For first hop
+    user_agent TEXT,
+    success BOOLEAN NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Append-only RLS: only INSERT allowed (via service_role), SELECT for team
+ALTER TABLE security_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE security_events FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS security_events_insert ON security_events;
+CREATE POLICY security_events_insert ON security_events FOR INSERT WITH CHECK (true);
+DROP POLICY IF EXISTS security_events_select ON security_events;
+CREATE POLICY security_events_select ON security_events FOR SELECT
+    USING (actor_id = auth.uid() OR target_id = auth_caller_team_id());
+-- No UPDATE/DELETE policies → append-only.
+```
+
+`AuditEvent` is a frozen pydantic model so accidental mutation in
+helper code raises immediately. `write_event` is fire-and-forget — it
+catches exceptions and logs `logger.error("audit write failed: %s", e)`.
+
+Helpers (one per common action):
+- `record_signup(adapter, *, user_id, ip, ua)`
+- `record_login_success(adapter, *, user_id, ip, ua)`
+- `record_login_failure(adapter, *, email, ip, ua)` — `actor_id=None`
+- `record_accept_invite(adapter, *, user_id, team_id, ip, ua)`
+
+**Acceptance criteria (spec references):**
+- [ ] AC-SEC-07: `security_events` table created via
+      `004_security_events.sql` with the 8 columns above
+- [ ] 6 tests pass: `write_event` happy-path, audit-failure-doesn't-raise,
+      each helper writes the right shape, metadata defaults to `{}`,
+      frozen model rejects mutation
+
+**Test approach:**
+- Unit tests: 4 in `tests/test_audit_log.py` covering model + helpers
+- Integration: 2 tests that drive `TestClient` through signup + login,
+  then query `security_events` and assert rows exist
+- Best-effort test: monkeypatch `adapter.insert` to raise, assert the
+  caller does NOT re-raise
+
+**Estimated effort:** M
+
+---
+
+### T-503: Audit hooks in auth + teams + billing routers
+
+**Files:**
+- `backend/app/services/auth.py` (modify — call audit helpers in
+  `signup`, `login`, `liff_login`)
+- `backend/app/routers/auth.py` (modify — pass request metadata
+  `ip, user_agent` to the service; on bad-credentials, emit
+  `record_login_failure`)
+- `backend/app/routers/teams.py` (modify — emit
+  `record_accept_invite` in `accept_invitation`)
+- `backend/app/routers/billing.py` (modify — emit `record_checkout`
+  + `record_portal` events)
+- `backend/tests/test_audit_log.py` (modify — 3 more integration
+  tests covering the new hooks)
+
+**Description:**
+Wire the audit helpers from T-502 into the existing routers. The
+auth router passes `Request` metadata (IP, UA) into the service so the
+audit row captures it. Failed logins emit
+`action='auth.login', success=false, actor_id=null, metadata={'email': email}`.
+Successful logins emit `success=true, actor_id=<user>`.
+
+Accept-invite emits `action='team.accept_invite', actor_id=<acceptor>,
+target_id=<team_id>, success=<bool>`. Billing emits
+`action='billing.checkout'` and `action='billing.portal'` on each
+call.
+
+All audit calls are **inside `try/except`** so a transient DB error
+on the audit table doesn't 500 the primary response.
+
+**Acceptance criteria (spec references):**
+- [ ] AC-SEC-08: signup writes one row `action='auth.signup',
+      actor_id=<new user>, success=true`
+- [ ] AC-SEC-09: login writes one row on success + one on bad password
+      (`success=true` vs `success=false`)
+- [ ] AC-SEC-10: accept-invite writes one row `action='team.accept_invite',
+      target_id=<team_id>`
+- [ ] 3 new tests in `test_audit_log.py` cover signup, login-success,
+      login-failure paths
+- [ ] All 302 existing tests still pass + 6 T-502 tests + 3 new = 311+
+
+**Test approach:**
+- Integration tests: drive `TestClient` through the flows, query
+  `security_events` directly via the supabase mock, assert row count
+  + shape
+- Edge cases: invalid email on signup → no audit row (since signup
+  raised before audit call); expired invitation → audit row with
+  `success=false`
+
+**Estimated effort:** M
+
+---
+
+### T-504: RLS write-path policies (gap closure)
+
+**Files:**
+- `backend/migrations/005_rls_gaps.sql` (new — write-path policies for
+  `team_invitations`, `team_memberships`, `billing_customers`)
+- `backend/tests/test_rls_smoke.py` (modify — 4 new tests covering
+  the new policies)
+
+**Description:**
+Cycle 3's `002_rls.sql` only enabled SELECT policies on most tables
+(team-scoped reads) and left INSERT/UPDATE/DELETE service-role-only.
+This is correct for an admin-only Supabase but blocks team members
+from doing common self-service operations:
+
+- A team owner can't **create an invitation** via anon auth (must go
+  through the backend's service-role key)
+- A team member can't **leave the team** (`UPDATE team_memberships
+  SET left_at=NOW()`)
+- A team owner can't **update their team's plan** display preferences
+
+T-504 adds the minimum write policies that let team members manage
+their own records via anon auth, without compromising isolation:
+
+```sql
+-- team_invitations: team members can INSERT invitations for their team
+CREATE POLICY team_invite_write ON team_invitations FOR INSERT
+    WITH CHECK (
+        team_id = auth_caller_team_id()
+        AND invited_by = auth.uid()
+    );
+-- team_memberships: a member can leave (UPDATE left_at) but cannot
+-- add or remove others
+CREATE POLICY team_membership_leave ON team_memberships FOR UPDATE
+    USING (user_id = auth.uid())
+    WITH CHECK (user_id = auth.uid());
+-- billing_customers: team owners can read their own (already SELECT),
+-- service_role still owns all writes
+```
+
+**Acceptance criteria (spec references):**
+- [ ] AC-SEC-11: RLS write policy on `team_invitations` allows team
+      members to INSERT invitations for their team via anon auth
+- [ ] 4 new RLS smoke tests pass: team-member-can-invite,
+      team-member-can-leave, anon-user-cannot-insert-into-other-team,
+      service-role-can-still-INSERT-everywhere
+
+**Test approach:**
+- Real-Supabase smoke tests (skipped unless `RUN_LIVE_SMOKE=1`)
+  exercise the policies end-to-end
+- Mock-level test: verifies the policy SQL is correctly authored
+  (parser-validated via `psql --dry-run` in CI)
+- Regression: all 311+ tests still pass
 
 **Estimated effort:** S
 
 ---
 
-### T-405: Real Stripe adapter + webhook handler
+### T-505: docs/security.md + final verification
 
 **Files:**
-- `backend/app/adapters/billing/real.py` (update — `StripeBillingAdapter`
-  implements all 4 methods using `stripe` Python SDK)
-- `backend/requirements.txt` (update — add `stripe==11.3.0`)
-- `backend/.env.example` (update — add `STRIPE_API_KEY`,
-  `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_*`)
-- `backend/tests/test_live_smoke.py` (update — add 1 live test for
-  real Stripe sandbox: create checkout session, verify URL format)
-- `backend/app/routers/billing.py` (update — in real mode, verify
-  webhook HMAC signature; in mock mode, accept unsigned payloads)
+- `docs/security.md` (new — secret-rotation runbook + audit review
+  query + incident response checklist)
+- `backend/.env.example` (modify — add inline comments warning about
+  the production deployment requirements)
+- (no test changes — T-501..504 cover tests)
 
 **Description:**
-This is the production wiring. The real `StripeBillingAdapter`:
-- Uses `stripe.checkout.Session.create(...)` for `create_checkout_session`
-- Uses `stripe.billing_portal.Session.create(...)` for `create_portal_session`
-- Uses `stripe.Subscription.retrieve(...)` for `get_subscription`
-- Uses `stripe.Subscription.modify(..., cancel_at_period_end=True)` for cancel
+The operator-facing runbook for the new security surface. Covers:
 
-Webhook handler in real mode:
-- Verifies `Stripe-Signature` header against `STRIPE_WEBHOOK_SECRET` using
-  `stripe.Webhook.construct_event(payload, sig, secret)`
-- Returns 200 on success, 400 on bad signature, 500 on handler error
+1. **Secret rotation playbook** — how to roll `JWT_SECRET` without
+   logging every user out (dual-verify window: accept tokens signed
+   with either old or new secret for 24h, then drop the old one).
+2. **Audit review query cookbook** — top-10 queries an ops engineer
+   should run during a security incident (failed logins by IP,
+   unusual signup velocity, permission denials, etc.).
+3. **Incident response checklist** — when `security_events` alerts
+   fire, what's the triage ladder.
+4. **`.env` reference** — every secret annotated with the production
+   requirement (e.g., `JWT_SECRET: required, ≥32 bytes, not the
+   default`).
 
-**Why this is separate:** real Stripe integration requires a Stripe
-account (live or test). The cycle 1-4 strategy is mock-first; the
-real wiring can land without disrupting the test suite.
+Final verification:
+- 311+ tests pass (302 baseline + 12 validator + 6 audit + 4 RLS - 3
+  overlap = ~319)
+- Coverage ≥ 92%
+- ruff + ruff-format + mypy strict clean
+- web typecheck + vitest clean
+- CI green
 
-**Acceptance criteria:**
-- [ ] Real adapter methods call Stripe SDK correctly
-- [ ] Webhook handler verifies Stripe HMAC signature
-- [ ] Test for `stripe.checkout.Session.create()` shape (MockTransport
-  against the SDK's underlying httpx client if possible)
-- [ ] Live smoke test creates a real Checkout session in Stripe test
-  mode (RUN_LIVE_BILLING=1)
-- [ ] CI stays green without Stripe keys
+**Acceptance criteria (spec references):**
+- [ ] AC-SEC-12: `docs/security.md` covers secret rotation + audit
+      review + incident response
+- [ ] AC-SEC-13: All 13+ new tests pass + 302 existing tests pass
+- [ ] All quality gates green
 
-**Estimated effort:** L (split into T-405a Stripe SDK wiring, T-405b webhook handler)
+**Test approach:**
+- This task is docs + final verification. No new tests.
+- Verify the runbook's queries by running them against the mock
+  Supabase (failing-logins scenario, leave-team scenario, etc.).
+
+**Estimated effort:** S
 
 ---
 
-### T-406: Frontend /dashboard/billing page
+## Dependency graph (text form)
 
-**Files:**
-- `web/lib/billing.ts` (new — typed API client wrapping the 4 endpoints)
-- `web/app/(app)/dashboard/billing/page.tsx` (new — pricing card,
-  current plan badge, "Manage billing" button → Stripe portal,
-  "Upgrade" CTA → plan picker)
-- `web/components/billing/PricingCard.tsx` (new — single plan card)
-- `web/components/billing/PlanPicker.tsx` (new — 3-plan toggle with
-  monthly USD prices)
-- `web/components/billing/UpgradeSuccessToast.tsx` (new — toast on
-  `?upgrade=success` query param)
-- `web/app/(app)/dashboard/leads/page.tsx` (update — header shows
-  plan badge)
-- `web/lib/api.ts` (update — adds BillingPlan enum + team plan helpers)
+```
+                T-501 (validators)
+                    │
+                    ▼
+                T-503 (audit hooks)
+                    │
+        ┌───────────┼───────────┐
+        ▼                       ▼
+    T-504 (RLS)            T-505 (docs + verify)
+        │                       │
+        └───────────┬───────────┘
+                    ▼
+            T-505 finalizes
 
-**Description:**
-The billing page renders:
-- Current plan card (with seat usage: "2 / 3 members")
-- 3-plan toggle → click → opens Stripe Checkout (or stub in mock)
-- "Manage billing" → opens Stripe Customer Portal
-- Webhook-success toast on `?upgrade=success`
+T-502 (audit infra) is parallel to T-501; both feed T-503.
+```
 
-Empty state: free plan (defaults), shows "Upgrade" CTA only.
-Loading state: skeleton + "Loading billing..."
+## Parallelizable work
 
-**Acceptance criteria:**
-- [ ] Page renders 3 pricing cards with correct monthly USD prices
-- [ ] Current plan highlighted
-- [ ] "Upgrade" CTA opens Stripe Checkout (or stub URL in mock)
-- [ ] "Manage billing" opens Stripe portal
-- [ ] Plan badge in dashboard header shows current plan
-- [ ] Webhook success toast on return from Stripe
-- [ ] Vitest render + interaction tests pass
+After the spec lands, two agents can run in parallel:
+- Agent A → T-501 (validators) → T-503 (hooks depend on T-501 for
+  the request metadata)
+- Agent B → T-502 (audit infra)
 
-**Estimated effort:** M
-
----
-
-### T-407: Update test suite + docs/billing.md
-
-**Files:**
-- `backend/tests/conftest.py` (update — autouse reset of billing mock cache)
-- `backend/tests/test_billing.py` (update — add 2 tests:
-  plan-upgrade-via-webhook updates state, plan-limit guard respects
-  growth → team upgrade)
-- `backend/tests/test_live_smoke.py` (update — add Stripe sandbox test)
-- `docs/billing.md` (new — user-facing doc: how billing works, how
-  to upgrade, how to handle failed payments, how to cancel)
-
-**Description:**
-The cycle 4 test suite update + docs. The billing doc explains:
-
-- Plan tiers (starter / growth / team) + limits
-- Per-seat billing model
-- How the upgrade flow works (Checkout → webhook → team.plan updated)
-- What happens on payment failure (status=`past_due`, email sent,
-  team can still log in but can't invite new members)
-- How to cancel (Stripe portal; status → `canceled` at period end)
-- How to switch from Stripe to manual billing (Cycle 5+ feature)
-
-**Acceptance criteria:**
-- [ ] All cycle-1+2+3 tests still pass (no regressions)
-- [ ] Cycle-4 tests add ≥ 25 new (across T-401..T-406)
-- [ ] docs/billing.md explains plans, limits, payment failure, cancel
-- [ ] Coverage stays ≥ 80%
-- [ ] CI green without Stripe keys
-
-**Estimated effort:** M
-
----
+T-503 needs both A and B. T-504 can start after T-503 lands (uses the
+audit hook patterns as a template). T-505 runs last.
 
 ## Risk register
 
-| Risk | Likelihood | Impact | Mitigation |
-|------|------------|--------|------------|
-| Stripe API costs (test mode is free) | L | M | Live smoke test uses Stripe **test mode** (no real charges). CI never hits Stripe. |
-| Webhook signature verification races | M | M | T-405 includes both happy-path (valid sig → 200) and bad-sig (401) tests. |
-| Plan-limit guard could lock out existing users on downgrade | L | H | Downgrade applies to NEW invites only; existing memberships are kept. Tested explicitly. |
-| Mock-first pattern divergence (mock accepts unsigned webhooks, real requires Stripe sig) | M | M | Both paths use the same handler code; only the verification flag differs. Tested both. |
-| Stripe SDK pinning (breaking changes between minor versions) | M | M | Pin `stripe==11.3.0`; document upgrade process in runbook. |
-| Billing state drift between mock + real | L | M | Same `billing_customers` table schema for both; mock implements the same methods. |
-| Cycle 4 is too big | M | M | T-405 split into T-405a (Stripe SDK) + T-405b (webhook). T-407 is just docs. |
+| Risk | Mitigation |
+|------|-----------|
+| Validator breaks existing tests (the env-detection logic must NOT trigger on tests) | Tests run with `env='test'`; the dev-override covers `dev`, `test`, and any env starting with `dev-` or `test-` |
+| Audit-log writes block the primary request | `write_event` is fire-and-forget; failures log to stderr but don't re-raise |
+| RLS write-path policies accidentally grant too much | T-504 only enables the minimum writes (team-scoped INSERT on invitations, self-UPDATE on memberships); no DELETE policies anywhere |
+| Migration `004_security_events.sql` clobbers existing tables | New tables only; idempotent `CREATE TABLE IF NOT EXISTS` + `DROP POLICY IF EXISTS` |
+| Docs reference commands that don't work in mock mode | Document both mock and real Supabase paths separately; cross-link to `docs/billing.md` and `docs/teams.md` |
 
----
+## Out of scope reminders
 
-## Out of scope (deferred to Cycle 5+)
-
-- Stripe Tax / promo codes / annual pricing
-- Per-property billing (we ship per-seat only)
-- Stripe Connect (multi-tenant payouts)
-- Plan downgrade refunds (Stripe handles, we just mirror status)
-- Audit log UI for billing events (the `audit_logs` table already exists)
-- Real-time quota metering (current = count on invite, not usage)
-- Self-service plan picker upgrades (only via Stripe Checkout for now)
-- Multi-currency support (USD only)
-
----
-
-## Coverage + quality bar (unchanged)
-
-- `pytest -q --cov=app --cov-fail-under=80` (real adapters excluded
-  from coverage as before)
-- `ruff + ruff format --check` clean
-- `mypy app/` strict, 0 errors
-- Frontend: `npm run lint + typecheck + vitest` clean
-
----
-
-## Estimated total effort
-
-| Task | Effort |
-|------|--------|
-| T-401 | S |
-| T-402 | S |
-| T-403 | M |
-| T-404 | S |
-| T-405 | L (split) |
-| T-406 | M |
-| T-407 | M |
-| **Total** | **~7–10 days of focused work** |
-
----
-
-_Updated: 2026-07-04T04:55:00Z — Cycle 4 plan drafted, pending user approval._
+- Rate limiting → cycle 6
+- MFA → cycle 6
+- Secret rotation tooling (the runbook covers the manual procedure;
+  the dual-verify window tooling ships in cycle 6)
+- GDPR data export → cycle 7
+- Front-end CSP/HSTS → cycle 6 (web-owned)
