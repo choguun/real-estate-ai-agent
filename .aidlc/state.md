@@ -1,10 +1,10 @@
 # AIDLC State
 
-- **Phase**: shipped
-- **Branch**: main
-- **PR**: #5 (merged 2026-07-04T10:26:51Z)
-- **Last action**: 2026-07-04T10:26:51Z
-- **Next action**: cycle 5 (C3 follow-up: JWT/CORS defaults + RLS hardening)
+- **Phase**: specifying
+- **Branch**: feat/security-hardening
+- **PR**: (TBD)
+- **Last action**: 2026-07-04T10:30:00Z
+- **Next action**: Run /plan to break cycle-5 spec into tasks
 - **Notes**:
   - 🎉 **Cycle 4 (per-seat billing + Stripe) shipped via PR #5**
   - Merged at `5ed76ba` to main
@@ -37,4 +37,11 @@
     router is purely additive; the only modified router was /teams for the
     accept-time plan-limit guard
 
-_Updated: 2026-07-04T10:26:51Z_
+- 🎉 **Cycle 5 spec drafted** — security hardening (fail-fast Settings
+    validators for prod + audit log + RLS gap close). 13 ACs (AC-SEC-01..13),
+    5 open questions (all recommendations logged).
+  - **Files touched this commit:**
+    - `.aidlc/spec.md` (rewritten for cycle 5)
+  - See commit `a4be343` for full spec.
+
+_Updated: 2026-07-04T10:30:00Z_
