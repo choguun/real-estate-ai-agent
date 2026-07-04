@@ -16,7 +16,9 @@ from uuid import UUID
 from app.adapters.supabase import SupabaseAdapter
 
 
-def create_team(adapter: SupabaseAdapter, *, name: str, owner_id: UUID) -> dict[str, Any]:
+def create_team(
+    adapter: SupabaseAdapter, *, name: str, owner_id: UUID, plan: str = "starter"
+) -> dict[str, Any]:
     """Create a team + add the owner as the first member.
 
     Inserts the team row, then inserts a `team_memberships` row with
@@ -24,7 +26,7 @@ def create_team(adapter: SupabaseAdapter, *, name: str, owner_id: UUID) -> dict[
     the second insert fails, the team row is left orphaned (acceptable
     in dev; Cycle 4+ will use a transaction).
     """
-    team = adapter.insert("teams", {"name": name, "owner_id": str(owner_id), "plan": "starter"})
+    team = adapter.insert("teams", {"name": name, "owner_id": str(owner_id), "plan": plan})
     adapter.insert(
         "team_memberships",
         {"team_id": str(team["id"]), "user_id": str(owner_id), "role": "owner"},

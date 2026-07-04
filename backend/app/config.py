@@ -83,6 +83,12 @@ class Settings(BaseSettings):
     supabase_storage_private: bool = False
     frontend_url: str = "http://localhost:3000"
 
+    # Stripe (cycle 4 T-405)  -- set USE_MOCKS=false to enable
+    stripe_api_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_price_growth: str = ""
+    stripe_price_team: str = ""
+
     cors_origins: list[str] = ["*"]
 
 

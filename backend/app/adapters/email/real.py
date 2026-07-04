@@ -19,5 +19,5 @@ class ResendEmailAdapter:
         html: str | None = None,
     ) -> dict[str, str]:
         raise NotImplementedError(
-            "ResendEmailAdapter.send is not wired. " "Set use_mocks=true (default) for local dev."
+            "ResendEmailAdapter.send is not wired. Set use_mocks=true (default) for local dev."
         )

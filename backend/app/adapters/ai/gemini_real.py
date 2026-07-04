@@ -22,6 +22,5 @@ class GeminiRealAdapter:
 
     def generate(self, request: ListingRequest) -> GeneratedContent:
         raise FallbackToNext(
-            "GeminiRealAdapter is not wired in MVP. "
-            "Set use_real_ai=false (default) to use mocks."
+            "GeminiRealAdapter is not wired in MVP. Set use_real_ai=false (default) to use mocks."
         )

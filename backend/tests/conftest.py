@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.adapters.billing import reset_cache as reset_billing_cache
 from app.adapters.email import reset_cache as reset_email_cache
 from app.adapters.supabase._factory import reset_mock_singleton
 from app.main import create_app
@@ -15,10 +17,10 @@ from app.main import create_app
 def _reset_all_caches() -> None:
     """Clear adapter singletons so each test starts with a clean slate."""
     reset_mock_singleton()
-    import contextlib
-
     with contextlib.suppress(Exception):
         reset_email_cache()
+    with contextlib.suppress(Exception):
+        reset_billing_cache()
 
 
 @pytest.fixture

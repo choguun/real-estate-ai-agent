@@ -29,7 +29,7 @@ def _auth(token: str) -> dict[str, str]:
 # ── ST-MT-01: create team ──────────────────────────────────────
 
 
-def test_create_team_sets_caller_as_owner() -> None:
+def test_create_team_sets_caller_as_owner(client) -> None:
     client = _client()
     token = _signup(client, "owner1@example.com")
     response = client.post(
@@ -49,7 +49,7 @@ def test_create_team_sets_caller_as_owner() -> None:
     assert members[0]["email"] == "owner1@example.com"
 
 
-def test_create_team_requires_auth() -> None:
+def test_create_team_requires_auth(client) -> None:
     response = _client().post("/api/teams", json={"name": "X"})
     assert response.status_code in (401, 403)
 
@@ -57,7 +57,7 @@ def test_create_team_requires_auth() -> None:
 # ── ST-MT-02: get_my_team ───────────────────────────────────────
 
 
-def test_get_my_team_returns_personal_team_after_signup() -> None:
+def test_get_my_team_returns_personal_team_after_signup(client) -> None:
     """T-304: signup auto-creates a personal team, so /me returns it."""
     client = _client()
     token = _signup(client, "loner@example.com")
@@ -68,7 +68,7 @@ def test_get_my_team_returns_personal_team_after_signup() -> None:
     assert body["name"].startswith("Personal ")
 
 
-def test_get_my_team_returns_team_after_explicit_creation() -> None:
+def test_get_my_team_returns_team_after_explicit_creation(client) -> None:
     """T-304: explicit POST /api/teams creates a second team; /me returns
     one of them (the user now has 2 memberships)."""
     client = _client()
@@ -89,7 +89,7 @@ def test_get_my_team_returns_team_after_explicit_creation() -> None:
 # ── ST-MT-03: list members ─────────────────────────────────────
 
 
-def test_list_members_requires_membership() -> None:
+def test_list_members_requires_membership(client) -> None:
     client = _client()
     token_a = _signup(client, "alice@example.com")
     token_b = _signup(client, "bob@example.com")
@@ -102,10 +102,35 @@ def test_list_members_requires_membership() -> None:
 # ── Invitations: token generation + UNIQUE ────────────────────
 
 
-def test_invite_member_returns_token() -> None:
+def _upgrade_via_webhook(client, team_id: str, plan: str = "growth") -> None:
+    """Helper: trigger a Stripe webhook to upgrade the team (cycle 4 T-403)."""
+    import json
+
+    payload = json.dumps(
+        {
+            "id": f"evt-up-{team_id[:8]}",
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "metadata": {"team_id": team_id, "plan": plan},
+                    "customer": "cus_test-" + team_id,
+                    "subscription": "sub_test-" + team_id,
+                }
+            },
+        }
+    ).encode()
+    client.post(
+        "/api/billing/webhook",
+        content=payload,
+        headers={"Content-Type": "application/json", "Stripe-Signature": "test-mock-sig"},
+    )
+
+
+def test_invite_member_returns_token(client) -> None:
     client = _client()
     token = _signup(client, "owner3@example.com")
     team = client.post("/api/teams", json={"name": "Inviters"}, headers=_auth(token)).json()
+    _upgrade_via_webhook(client, team["id"])
     response = client.post(
         f"/api/teams/{team['id']}/invitations",
         json={"email": "alice@example.com", "role": "agent"},
@@ -119,11 +144,12 @@ def test_invite_member_returns_token() -> None:
     assert len(body["token"]) >= 32
 
 
-def test_invite_token_is_high_entropy() -> None:
+def test_invite_token_is_high_entropy(client) -> None:
     """Token must be secure — at least 32 bytes of entropy."""
     client = _client()
     token = _signup(client, "owner4@example.com")
     team = client.post("/api/teams", json={"name": "Secure"}, headers=_auth(token)).json()
+    _upgrade_via_webhook(client, team["id"])
     response = client.post(
         f"/api/teams/{team['id']}/invitations",
         json={"email": "x@x.com"},
@@ -136,11 +162,12 @@ def test_invite_token_is_high_entropy() -> None:
     assert not re.match(r"^[a-z]+$", token_str)
 
 
-def test_invite_only_owner_can_invite() -> None:
+def test_invite_only_owner_can_invite(client) -> None:
     """Non-owners get 403 even if they are team members."""
     client = _client()
     owner_token = _signup(client, "owner5@example.com")
     team = client.post("/api/teams", json={"name": "Strict"}, headers=_auth(owner_token)).json()
+    _upgrade_via_webhook(client, team["id"])
     team_id = team["id"]
     # Invite an agent
     client.post(

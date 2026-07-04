@@ -20,18 +20,43 @@ def _signup(client: TestClient, email: str) -> str:
     return r.json()["token"]
 
 
+def _upgrade_via_webhook(client, team_id, plan="growth"):
+    """Cycle 4 T-403 helper: trigger a Stripe webhook to upgrade the team."""
+    import json as _json
+
+    payload = _json.dumps(
+        {
+            "id": f"evt-up-test-{team_id[:8]}",
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "metadata": {"team_id": team_id, "plan": plan},
+                    "customer": "cus_test-" + team_id,
+                    "subscription": "sub_test-" + team_id,
+                }
+            },
+        }
+    ).encode()
+    client.post(
+        "/api/billing/webhook",
+        content=payload,
+        headers={"Content-Type": "application/json", "Stripe-Signature": "test-mock-sig"},
+    )
+
+
 def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def test_invite_email_is_sent_to_invitee() -> None:
+def test_invite_email_is_sent_to_invitee(client) -> None:
     """ST-MT-08: invite creates a row + sends an email (mock logs)."""
     from app.adapters.email import build_email_adapter
     from app.config import get_settings
 
-    client = _client()
-    token = _signup(client, "owner-inv@example.com")
-    client.post("/api/teams", json={"name": "Invite Test"}, headers=_auth(token))
+    # The 'client' fixture is used (auto-resets caches) so subsequent
+    # tests in this module see a fresh state.
+    # (The "client" fixture creates the user + personal team only; the
+    # team2 we care about is created in c below and upgraded there.)
 
     # Create a fresh email adapter (with empty sent list) to inspect
     email_svc = build_email_adapter(get_settings())
@@ -39,7 +64,6 @@ def test_invite_email_is_sent_to_invitee() -> None:
 
     # Re-create the app with a dependency override so the test sees this email adapter
     from app.deps import get_email
-    from app.main import create_app
 
     app = create_app()
     app.dependency_overrides[get_email] = lambda: email_svc
@@ -54,8 +78,11 @@ def test_invite_email_is_sent_to_invitee() -> None:
         ).json()["token"]
         c.headers["Authorization"] = f"Bearer {tok}"
         t = c.post(
-            "/api/teams", json={"name": "Invite Test"}, headers={"Authorization": f"Bearer {tok}"}
+            "/api/teams",
+            json={"name": "Invite Test"},
+            headers={"Authorization": f"Bearer {tok}"},
         ).json()
+        _upgrade_via_webhook(c, t["id"])
         r = c.post(
             f"/api/teams/{t['id']}/invitations",
             json={"email": "alice@example.com", "role": "agent"},
@@ -65,13 +92,14 @@ def test_invite_email_is_sent_to_invitee() -> None:
     assert any(e["to"] == "alice@example.com" and "/invite/" in e["body"] for e in email_svc.sent)
 
 
-def test_invite_token_is_high_entropy() -> None:
+def test_invite_token_is_high_entropy(client) -> None:
     """ST-MT-08: token must be ≥32 bytes entropy (URL-safe base64)."""
     import re
 
     client = _client()
     token = _signup(client, "owner-tok@example.com")
     team = client.post("/api/teams", json={"name": "TokTest"}, headers=_auth(token)).json()
+    _upgrade_via_webhook(client, team["id"])
     response = client.post(
         f"/api/teams/{team['id']}/invitations",
         json={"email": "x@x.com"},
@@ -83,11 +111,12 @@ def test_invite_token_is_high_entropy() -> None:
     assert not re.match(r"^[a-z]+$", tok)  # not easily guessable
 
 
-def test_accept_invite_creates_user_and_returns_jwt() -> None:
+def test_accept_invite_creates_user_and_returns_jwt(client) -> None:
     """ST-MT-09: accept flow creates a new user + adds to team + returns JWT."""
     client = _client()
     owner_token = _signup(client, "owner-acc@example.com")
     team = client.post("/api/teams", json={"name": "AcceptTest"}, headers=_auth(owner_token)).json()
+    _upgrade_via_webhook(client, team["id"])
 
     # Owner invites
     invite = client.post(
@@ -116,12 +145,13 @@ def test_accept_invite_creates_user_and_returns_jwt() -> None:
     assert newbie_member["role"] == "agent"
 
 
-def test_accept_invite_reuses_existing_user() -> None:
+def test_accept_invite_reuses_existing_user(client) -> None:
     """If the invitee already has an account, accept adds them to the team."""
     client = _client()
     owner_token = _signup(client, "owner-reuse@example.com")
     _signup(client, "existing@example.com")  # pre-create user
     team = client.post("/api/teams", json={"name": "Reuse"}, headers=_auth(owner_token)).json()
+    _upgrade_via_webhook(client, team["id"])
 
     invite = client.post(
         f"/api/teams/{team['id']}/invitations",
@@ -135,18 +165,19 @@ def test_accept_invite_reuses_existing_user() -> None:
     assert response.json()["user"]["email"] == "existing@example.com"
 
 
-def test_accept_invite_rejects_invalid_token() -> None:
+def test_accept_invite_rejects_invalid_token(client) -> None:
     client = _client()
     response = client.post("/api/teams/invitations/no-such-token/accept", json={})
     assert response.status_code == 400
     assert "invalid" in response.json()["detail"].lower()
 
 
-def test_accept_invite_rejects_double_use() -> None:
+def test_accept_invite_rejects_double_use(client) -> None:
     """ST-MT-09: 410 Gone on second accept."""
     client = _client()
     owner_token = _signup(client, "owner-double@example.com")
     team = client.post("/api/teams", json={"name": "Double"}, headers=_auth(owner_token)).json()
+    _upgrade_via_webhook(client, team["id"])
     invite = client.post(
         f"/api/teams/{team['id']}/invitations",
         json={"email": "x2@x.com", "role": "agent"},
@@ -164,7 +195,7 @@ def test_accept_invite_rejects_double_use() -> None:
     assert r2.status_code == 410
 
 
-def test_accept_invite_for_liff_user_sets_password() -> None:
+def test_accept_invite_for_liff_user_sets_password(client) -> None:
     """LIFF users have no password yet; the accept form must supply one."""
     from app.adapters.supabase._factory import get_db
     from app.config import get_settings
@@ -172,6 +203,7 @@ def test_accept_invite_for_liff_user_sets_password() -> None:
     client = _client()
     owner_token = _signup(client, "owner-liff-acc@example.com")
     team = client.post("/api/teams", json={"name": "LiffAcc"}, headers=_auth(owner_token)).json()
+    _upgrade_via_webhook(client, team["id"])
 
     # Create a LIFF user (no password)
     db = get_db(get_settings())

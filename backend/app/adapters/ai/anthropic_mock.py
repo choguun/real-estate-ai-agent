@@ -95,13 +95,13 @@ def _ddproperty(req: ListingRequest, ptype: str) -> GeneratedContent:
 
         รายละเอียด:
         - ประเภท: {t}
-        - ขนาด: {p.size_sqm or '—'} ตร.ม.
-        - ห้องนอน: {p.bedrooms or '—'}
-        - ห้องน้ำ: {p.bathrooms or '—'}
-        - ชั้น: {p.floor or '—'}
+        - ขนาด: {p.size_sqm or "—"} ตร.ม.
+        - ห้องนอน: {p.bedrooms or "—"}
+        - ห้องน้ำ: {p.bathrooms or "—"}
+        - ชั้น: {p.floor or "—"}
         - ทำเล: {loc}
         - ราคา: {_money(p.price)} บาท
-        - โควต้าต่างชาติ: {'มี' if p.foreign_quota else 'ไม่มี'}
+        - โควต้าต่างชาติ: {"มี" if p.foreign_quota else "ไม่มี"}
 
         สนใจติดต่อ ดูสถานที่จริงได้ตามสะดวก
         """

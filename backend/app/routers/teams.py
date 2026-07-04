@@ -45,7 +45,8 @@ def create_team_endpoint(
     supabase: DBDep,
 ) -> TeamOut:
     """ST-MT-01: create a team + set caller as owner."""
-    team = create_team(supabase, name=payload.name, owner_id=UUID(user_id))
+    plan = payload.model_dump().get("plan") or "starter"
+    team = create_team(supabase, name=payload.name, owner_id=UUID(user_id), plan=plan)
     return TeamOut.model_validate(team)
 
 
@@ -114,6 +115,16 @@ def invite_member(
         team_id=team_id,
     ):
         raise HTTPException(status_code=409, detail="user is already a team member")
+
+    from app.services.plan_limits import PlanLimitExceeded, assert_can_invite
+
+    try:
+        assert_can_invite(supabase, team_id=team_id)
+    except PlanLimitExceeded as exc:
+        raise HTTPException(
+            status_code=403,
+            detail=f"plan limit exceeded ({exc.code}): {exc.used}/{exc.limit}",
+        ) from exc
 
     token = generate_invite_token()
     invitation = supabase.insert(
@@ -202,7 +213,17 @@ def accept_invitation(
         )
         user_id = UUID(user["id"])
 
-    # Add to team (skip if already a member)
+    # Add to team (skip if already a member). Enforce the seat cap
+    # *before* inserting a new membership row — otherwise an invite
+    # created while the team was on a higher plan could be accepted
+    # after a downgrade and silently overshoot the new cap.
+    from app.services.plan_limits import PlanLimitExceeded, assert_can_invite
+
+    try:
+        assert_can_invite(supabase, team_id=team_id)
+    except PlanLimitExceeded as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
     existing_memberships = supabase.query(
         "team_memberships",
         filters={"team_id": str(team_id), "user_id": str(user_id)},
