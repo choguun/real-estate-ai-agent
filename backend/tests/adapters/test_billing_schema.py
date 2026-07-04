@@ -107,3 +107,46 @@ def test_teams_plan_limits_column_added() -> None:
     from app.adapters.supabase._schema import TEAMS
 
     assert TEAMS.has("plan_limits")
+
+
+# ── T-502: SECURITY_EVENTS (cycle 5) ───────────────────────────────
+def test_security_events_is_in_schema(db) -> None:
+    """T-502: security_events is declared in _schema.py."""
+    assert "security_events" in db.schema.table_names
+
+
+def test_security_events_has_required_columns(db) -> None:
+    """T-502: the audit table has the columns we write to."""
+    table = db.schema.get("security_events")
+    col_names = {c.name for c in table.columns}
+    assert {
+        "id",
+        "actor_id",
+        "action",
+        "target_id",
+        "ip",
+        "user_agent",
+        "success",
+        "metadata",
+        "created_at",
+    } <= col_names
+
+
+def test_security_events_insert_round_trip(db) -> None:
+    """Insert a row, query it back, assert shape."""
+    inserted = db.insert(
+        "security_events",
+        {
+            "actor_id": "00000000-0000-0000-0000-000000000001",
+            "action": "test.event",
+            "target_id": None,
+            "ip": "127.0.0.1",
+            "user_agent": "curl/8.0",
+            "success": True,
+            "metadata": {"k": "v"},
+        },
+    )
+    assert inserted["id"]  # auto-generated
+    assert inserted["action"] == "test.event"
+    rows = db.query("security_events", filters={"action": "test.event"})
+    assert len(rows) == 1

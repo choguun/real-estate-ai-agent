@@ -388,6 +388,23 @@ AUDIT_LOGS = Table(
 )
 
 
+# 004_security_events.sql: append-only audit log (NEW — cycle 5 T-502)
+SECURITY_EVENTS = Table(
+    "security_events",
+    (
+        _col("id", "UUID", nullable=False, default=_uuid),
+        _col("actor_id", "UUID"),
+        _col("action", "TEXT", nullable=False),
+        _col("target_id", "UUID"),
+        _col("ip", "TEXT"),
+        _col("user_agent", "TEXT"),
+        _col("success", "BOOLEAN", nullable=False),
+        _col("metadata", "JSONB", default=lambda: {}),
+        _col("created_at", "TIMESTAMPTZ", nullable=False, default=_now),
+    ),
+)
+
+
 DEFAULT_SCHEMA = Schema(
     (
         USERS,
@@ -404,5 +421,6 @@ DEFAULT_SCHEMA = Schema(
         CONTRACTS,
         USER_SETTINGS,
         AUDIT_LOGS,
+        SECURITY_EVENTS,  # NEW (cycle 5)
     )
 )
