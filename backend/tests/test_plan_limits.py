@@ -222,6 +222,7 @@ def test_invite_succeeds_after_upgrade() -> None:
     )
     assert r.status_code == 201, r.text
 
+
 # ── accept_invitation respects plan cap (T-404 follow-up) ─────────
 def test_accept_invitation_403_when_team_already_full(db) -> None:
     """After team is already at the seat cap, accepting a new invite must 403.
@@ -246,6 +247,7 @@ def test_accept_invitation_403_when_team_already_full(db) -> None:
     email_svc.reset()
     app = create_app()
     from app.deps import get_email
+
     app.dependency_overrides[get_email] = lambda: email_svc
     c = TestClient(app)
 
