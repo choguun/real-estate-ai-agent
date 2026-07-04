@@ -91,6 +91,14 @@ class Settings(BaseSettings):
 
     cors_origins: list[str] = ["*"]
 
+    # ── Cycle 6 T-601 rate-limit policies ──
+    # Override these via env to tighten or relax per environment.
+    # Defaults: 5 login attempts / 15min per IP, 5 signups / hr per
+    # IP (anti-enumeration), 20 invitations / hr per owner.
+    rate_limit_login_per_15min: int = 5
+    rate_limit_signup_per_hour: int = 5
+    rate_limit_invite_per_hour: int = 20
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
