@@ -220,18 +220,23 @@ def record_rate_limited(
     action: str,
     limit: int,
     user_agent: str | None = None,
+    event_action: str | None = None,
 ) -> None:
     """A request was rejected by the rate limiter.
 
     `actor_id` is None (anonymous — we don't know who they are yet).
     The metadata captures the action + limit so an ops dashboard
     can alert on "auth.login rate-limited from IP X 50 times today".
+
+    `event_action` overrides the audit row's `action` field when set
+    (e.g., `team.invite_rate_limited` for invite-specific events).
+    Defaults to `auth.rate_limited` for backward compat.
     """
     write_event(
         adapter,
         AuditEvent(
             actor_id=None,
-            action=ACTION_LOGIN_RATE_LIMITED,
+            action=event_action or ACTION_LOGIN_RATE_LIMITED,
             target_id=None,
             ip=ip,
             user_agent=user_agent,

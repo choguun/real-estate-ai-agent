@@ -235,3 +235,170 @@ def test_accept_invite_for_liff_user_sets_password(client) -> None:
     # And the user's password is now hashed (non-empty)
     user_rows = db.query("users", filters={"email": "liff-user@example.com"})
     assert user_rows[0]["password_hash"]  # non-empty
+
+
+# ─── Cycle 6 T-603: rate-limit on POST /api/teams/{id}/invitations ──
+
+
+def test_invite_rate_limited_after_20_attempts(client: TestClient) -> None:
+    """AC-RL-03: 21st invitation from same owner in 1 hr returns 429.
+
+    Uses distinct emails per attempt so the 409 user-is-already-a-member
+    path doesn't interfere with the rate-limit check.
+    """
+    from app.adapters.email import build_email_adapter
+    from app.config import get_settings
+    from app.deps import get_email
+    from app.main import create_app
+
+    settings = get_settings()
+    email_svc = build_email_adapter(settings)
+    email_svc.reset()
+    app = create_app()
+    app.dependency_overrides[get_email] = lambda: email_svc
+    # Capture the db singleton the request will use so the audit query
+    # below sees the rows (the singleton is shared via the autouse
+    # fixture's reset).
+    from app.adapters.supabase._factory import get_db as _get_db
+
+    captured_db = _get_db(settings)
+    from app.deps import DBDep
+
+    app.dependency_overrides[DBDep] = lambda: captured_db
+    with TestClient(app) as c:
+        # Owner creates team + upgrades so seat cap isn't the limiter
+        tok = c.post(
+            "/api/auth/signup",
+            json={
+                "email": "invite-rl-owner@example.com",
+                "password": "supersecret123",
+                "full_name": "Owner",
+            },
+        ).json()["token"]
+        c.headers["Authorization"] = f"Bearer {tok}"
+        team = c.post("/api/teams", json={"name": "RL"}).json()
+        # Upgrade to growth (3 seats) — but we need 20 invites, so go to team (10)
+        import json as _json
+        import uuid as _uuid
+
+        payload = _json.dumps(
+            {
+                "id": f"evt-up-test-{team['id'][:8]}-{_uuid.uuid4().hex[:8]}",
+                "type": "checkout.session.completed",
+                "data": {
+                    "object": {
+                        "metadata": {"team_id": team["id"], "plan": "team"},
+                        "customer": "cus_rl_test-" + team["id"],
+                        "subscription": "sub_rl_test-" + team["id"],
+                    }
+                },
+            }
+        ).encode()
+        c.post(
+            "/api/billing/webhook",
+            content=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Stripe-Signature": "test-mock-sig",
+            },
+        )
+
+        # First 20 invitations succeed (201)
+        for i in range(20):
+            r = c.post(
+                f"/api/teams/{team['id']}/invitations",
+                json={"email": f"invitee-{i}@example.com", "role": "agent"},
+            )
+            assert r.status_code == 201, (
+                f"invitation {i + 1} should succeed; got {r.status_code}: {r.text}"
+            )
+        # 21st is rate-limited
+        r21 = c.post(
+            f"/api/teams/{team['id']}/invitations",
+            json={"email": "invitee-21@example.com", "role": "agent"},
+        )
+        assert r21.status_code == 429, r21.text
+        assert "retry-after" in {k.lower() for k in r21.headers}
+
+
+def test_invite_rate_limit_emits_audit_row(client: TestClient) -> None:
+    """AC-RL-04 (team subset): each 429 writes a security_events row
+    with action='team.invite_rate_limited'.
+    """
+    from app.adapters.email import build_email_adapter
+    from app.adapters.supabase._factory import get_db as _get_db
+    from app.config import get_settings
+    from app.deps import DBDep, get_email
+    from app.main import create_app
+
+    settings = get_settings()
+    email_svc = build_email_adapter(settings)
+    email_svc.reset()
+    captured_db = _get_db(settings)
+    app = create_app()
+    app.dependency_overrides[get_email] = lambda: email_svc
+    app.dependency_overrides[DBDep] = lambda: captured_db
+    with TestClient(app) as c:
+        tok = c.post(
+            "/api/auth/signup",
+            json={
+                "email": "invite-rl-audit@example.com",
+                "password": "supersecret123",
+                "full_name": "Owner",
+            },
+        ).json()["token"]
+        c.headers["Authorization"] = f"Bearer {tok}"
+        team = c.post("/api/teams", json={"name": "RL"}).json()
+        # Upgrade to team plan (10 seats)
+        import json as _json
+        import uuid as _uuid
+
+        payload = _json.dumps(
+            {
+                "id": f"evt-up-test-{team['id'][:8]}-{_uuid.uuid4().hex[:8]}",
+                "type": "checkout.session.completed",
+                "data": {
+                    "object": {
+                        "metadata": {"team_id": team["id"], "plan": "team"},
+                        "customer": "cus_rl_audit-" + team["id"],
+                        "subscription": "sub_rl_audit-" + team["id"],
+                    }
+                },
+            }
+        ).encode()
+        c.post(
+            "/api/billing/webhook",
+            content=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Stripe-Signature": "test-mock-sig",
+            },
+        )
+
+        # 20 invites succeed
+        for i in range(20):
+            r = c.post(
+                f"/api/teams/{team['id']}/invitations",
+                json={"email": f"invitee-{i}@example.com", "role": "agent"},
+            )
+            assert r.status_code == 201, (
+                f"invitation {i + 1} should succeed; got {r.status_code}: {r.text}"
+            )
+        # 21st triggers the audit row
+        r21 = c.post(
+            f"/api/teams/{team['id']}/invitations",
+            json={"email": "invitee-21@example.com", "role": "agent"},
+        )
+        assert r21.status_code == 429
+
+    all_events = captured_db.query("security_events")
+    print("DEBUG: all events:")
+    for e in all_events:
+        print(f"  {e}")
+    invite_rl = [e for e in all_events if e["action"] == "team.invite_rate_limited"]
+    rows = invite_rl
+    assert len(rows) >= 1, "expected at least one invite-rate-limit audit row"
+    row = rows[-1]
+    assert row["success"] is False
+    assert row["metadata"]["action"] == "team.invite"
+    assert row["metadata"]["limit"] == 20
