@@ -302,15 +302,15 @@ All audit calls are **inside `try/except`** so a transient DB error
 on the audit table doesn't 500 the primary response.
 
 **Acceptance criteria (spec references):**
-- [ ] AC-SEC-08: signup writes one row `action='auth.signup',
+- [x] AC-SEC-08: signup writes one row `action='auth.signup',
       actor_id=<new user>, success=true`
-- [ ] AC-SEC-09: login writes one row on success + one on bad password
+- [x] AC-SEC-09: login writes one row on success + one on bad password
       (`success=true` vs `success=false`)
-- [ ] AC-SEC-10: accept-invite writes one row `action='team.accept_invite',
+- [x] AC-SEC-10: accept-invite writes one row `action='team.accept_invite',
       target_id=<team_id>`
-- [ ] 3 new tests in `test_audit_log.py` cover signup, login-success,
-      login-failure paths
-- [ ] All 302 existing tests still pass + 6 T-502 tests + 3 new = 311+
+- [x] 4 new integration tests in `test_audit_log.py` cover signup,
+      login-success, login-failure, accept-invite paths
+- [x] All 302 existing tests still pass + 13 T-502 tests + 4 new = 338+
 
 **Test approach:**
 - Integration tests: drive `TestClient` through the flows, query
@@ -321,6 +321,13 @@ on the audit table doesn't 500 the primary response.
   `success=false`
 
 **Estimated effort:** M
+
+**Done:** T-503 implementation committed (9ac2ce0).
+**Notes:** `Request` injected into auth + teams endpoints to capture
+X-Forwarded-For (first hop, for Railway/Vercel/nginx-fronted deploys)
++ User-Agent header for the audit row. Billing audit hooks (record_checkout,
+record_portal) deferred to T-503.b — the spec listed them but no test
+covers them yet; cycle 6 can pick this up.
 
 ---
 
