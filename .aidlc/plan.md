@@ -403,15 +403,21 @@ Production uses the strict version. Gated by `NODE_ENV`.
 - [x] AC-WEB-03: X-Content-Type-Options, X-Frame-Options,
       Referrer-Policy present
 - [x] AC-WEB-04: headers apply to all routes (`/(.*)` matcher)
-- [x] AC-WEB-05: 3 vitest tests pass
+- [x] AC-WEB-05: 4 vitest tests pass (1 extra for matcher coverage)
 
 **Test approach:**
-- Vitest tests assert the headers on a rendered test page
-- Use Next.js's `next dev` test fixture (or just test the config
-  function directly — simpler and faster)
-- One test per header group (CSP / HSTS / others)
+- Vitest tests import `nextConfig` directly and call the
+  `headers()` function — no `next dev` needed. Faster + tests
+  the contract, not the server.
 
 **Estimated effort:** S
+
+**Done:** T-605 implementation committed (e512fc1).
+**Notes:** CSP allows 'unsafe-inline' for scripts because Next.js's
+bootstrap script is inline. This is the only unsafe directive;
+tighten to nonce-based CSP in cycle 7+ if a CSP-violation
+channel is added. dev allows 'unsafe-eval' for HMR; prod doesn't.
+Stripe Checkout explicitly allowed in frame-src + connect-src.
 
 ---
 
