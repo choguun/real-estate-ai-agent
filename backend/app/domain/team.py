@@ -19,7 +19,10 @@ class TeamCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=120)
-    plan: str = "starter"
+    # C1 sub-fix: plan is "starter" only at creation. Upgrades happen
+    # via Stripe Checkout + webhook (T-403). Without this Literal a user
+    # could self-promote to "enterprise" by sending plan=enterprise.
+    plan: Literal["starter"] = "starter"
 
 
 class TeamOut(BaseModel):

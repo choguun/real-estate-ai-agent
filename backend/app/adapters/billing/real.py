@@ -32,14 +32,13 @@ from app.adapters.billing.base import BillingAdapter
 logger = logging.getLogger(__name__)
 
 
-# Map our plan tiers to Stripe price IDs. Operators configure these
-# in their Stripe dashboard + .env. Default: None (raises on use).
-_PLAN_TO_PRICE: dict[str, str | None] = {
-    "starter": None,  # free, no Stripe checkout
-    "growth": None,  # set STRIPE_PRICE_GROWTH=price_xxx in .env
-    "team": None,  # set STRIPE_PRICE_TEAM=price_xxx
-    "enterprise": None,
-}
+# Plan→price_id map is now per-instance (see StripeBillingAdapter.__init__).
+# Operators configure these via the factory (env vars: STRIPE_PRICE_GROWTH,
+# STRIPE_PRICE_TEAM). Default: None (raises on use).
+#
+# (Cycle 4 review fix: this used to be a module-global dict that two
+# adapter instances would leak config through. Per-instance state
+# fixes that.)
 
 
 class StripeBillingAdapter(BillingAdapter):
@@ -66,10 +65,15 @@ class StripeBillingAdapter(BillingAdapter):
             stripe.default_http_client = http_client
         self._api_key = api_key
         self._webhook_secret = webhook_secret
-        if price_growth:
-            _PLAN_TO_PRICE["growth"] = price_growth
-        if price_team:
-            _PLAN_TO_PRICE["team"] = price_team
+        # Instance state (C1 review fix): keep the plan→price_id map on
+        # `self` so two adapter instances don't leak config into each
+        # other via the previous module-global `_PLAN_TO_PRICE`.
+        self._plan_to_price: dict[str, str | None] = {
+            "starter": None,
+            "growth": price_growth,
+            "team": price_team,
+            "enterprise": None,
+        }
 
     # ── Checkout ──────────────────────────────────────────────────
     def create_checkout_session(
@@ -80,7 +84,7 @@ class StripeBillingAdapter(BillingAdapter):
         success_url: str,
         cancel_url: str,
     ) -> dict[str, str]:
-        price_id = _PLAN_TO_PRICE.get(plan)
+        price_id = self._plan_to_price.get(plan)
         if not price_id:
             raise ValueError(
                 f"No Stripe price configured for plan {plan!r}. "
@@ -120,7 +124,8 @@ class StripeBillingAdapter(BillingAdapter):
         except StripeError as exc:
             logger.error("Stripe subscription retrieve failed: %s", exc)
             raise
-        return sub.to_dict() if hasattr(sub, "to_dict") else dict(sub)  # type: ignore[call-overload, unused-ignore]
+        sub_dict: dict[str, Any] = sub.to_dict() if hasattr(sub, "to_dict") else dict(sub)  # type: ignore[call-overload, unused-ignore]
+        return sub_dict
 
     # ── Webhook ──────────────────────────────────────────────────
     def verify_webhook_signature(self, *, payload: bytes, signature_header: str) -> dict[str, Any]:
@@ -137,7 +142,8 @@ class StripeBillingAdapter(BillingAdapter):
             raise ValueError(f"invalid Stripe signature: {exc}") from exc
         except StripeError as exc:
             raise ValueError(f"Stripe webhook error: {exc}") from exc
-        return event.to_dict() if hasattr(event, "to_dict") else dict(event)
+        result: dict[str, Any] = event.to_dict() if hasattr(event, "to_dict") else dict(event)
+        return result
 
     # ── Helpers ──────────────────────────────────────────────────
     def _get_or_create_customer(self, *, team_id: str) -> str:

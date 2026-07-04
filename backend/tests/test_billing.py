@@ -126,7 +126,7 @@ def test_webhook_signature_validated_in_real_mode(
     r = client.post(
         "/api/billing/webhook",
         content=payload,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "Stripe-Signature": "test-mock-sig"},
     )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "ok"
@@ -162,7 +162,7 @@ def test_webhook_upgrades_team_plan(client: TestClient) -> None:
     r = client.post(
         "/api/billing/webhook",
         content=payload,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "Stripe-Signature": "test-mock-sig"},
     )
     assert r.status_code == 200
     # Verify team plan was updated
@@ -195,7 +195,7 @@ def test_webhook_subscription_deleted_reverts_to_starter(
     client.post(
         "/api/billing/webhook",
         content=checkout_payload,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "Stripe-Signature": "test-mock-sig"},
     )
     # Then, delete
     delete_payload = json.dumps(
@@ -213,7 +213,7 @@ def test_webhook_subscription_deleted_reverts_to_starter(
     r = client.post(
         "/api/billing/webhook",
         content=delete_payload,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "Stripe-Signature": "test-mock-sig"},
     )
     assert r.status_code == 200
     status = client.get("/api/billing/status", headers=_auth(token)).json()
@@ -240,14 +240,14 @@ def test_webhook_is_idempotent_on_replay(client: TestClient) -> None:
     r1 = client.post(
         "/api/billing/webhook",
         content=payload,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "Stripe-Signature": "test-mock-sig"},
     )
     assert r1.status_code == 200
     # Replay
     r2 = client.post(
         "/api/billing/webhook",
         content=payload,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "Stripe-Signature": "test-mock-sig"},
     )
     assert r2.status_code == 200
     assert r2.json()["status"] == "duplicate"

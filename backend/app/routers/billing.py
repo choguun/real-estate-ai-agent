@@ -107,13 +107,13 @@ async def billing_webhook(
     STRIPE_WEBHOOK_SECRET.
     Mock mode: accepts unsigned payloads (test-only).
     """
-    import os
 
-    if stripe_signature is None:
-        if os.environ.get("USE_MOCKS", "true").lower() == "true":
-            stripe_signature = "mock-signature"
-        else:
-            raise HTTPException(status_code=400, detail="missing Stripe-Signature header")
+    # C6 review fix: ALWAYS require a signature. The mock adapter ignores
+    # the signature value (mock mode is selected at construction, not at
+    # the verification step). This prevents the catastrophic failure mode
+    # where USE_MOCKS=true ships to production and accepts unsigned payloads.
+    if not stripe_signature:
+        raise HTTPException(status_code=400, detail="missing Stripe-Signature header")
 
     payload = await request.body()
     try:

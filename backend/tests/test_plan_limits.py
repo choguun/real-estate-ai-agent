@@ -169,7 +169,7 @@ def test_invite_succeeds_after_upgrade() -> None:
     client.post(
         "/api/billing/webhook",
         content=payload,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "Stripe-Signature": "test-mock-sig"},
     )
     # Now invite should succeed (growth = 3 seats, 1 used → fits)
     r = client.post(
