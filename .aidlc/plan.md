@@ -177,20 +177,25 @@ legitimate traffic. The error is logged to stderr.
 - [x] AC-RL-05: `RateLimiter` Protocol + `InMemoryRateLimiter` shipped
 - [x] AC-RL-06: `RedisRateLimiter` stub class exists, passes
       `isinstance(r, RateLimiter)`
-- [x] 8 unit tests pass: window expiry, multi-key independence,
-      action-policy enforcement, fail-open on internal exception,
-      thread-safety smoke test, Redis stub raises NotImplementedError,
-      reset_cache clears state for tests
+- [x] 13 tests pass (8 unit + 2 Protocol/Redis-stub + 2 factory +
+      1 thread-safety smoke)
 
 **Test approach:**
-- Unit tests: 8 in `tests/test_rate_limit.py`, each isolated
+- Unit tests in `tests/test_rate_limit.py`, each isolated
   via `reset_cache()` in a fixture
-- Mock-time: use `time.monotonic()` mocking to advance the clock
+- Mock-time: use `time.monotonic()` patching to advance the clock
   past the window
-- Thread-safety smoke: spawn 10 threads each calling `allow()`
-  100 times, assert total allowed ≤ limit × number of windows
+- Thread-safety smoke: 10 threads × 100 calls each against a limit
+  of 50 — assert exactly 50 allowed (no over-count, no race)
 
 **Estimated effort:** M
+
+**Done:** T-601 implementation committed (383386a).
+**Notes:** Sliding-window algorithm using `collections.deque` +
+`threading.RLock`. Fail-open contract: any internal exception in
+`allow()` is caught + logged + returns `allowed=True` so a broken
+limiter never blocks traffic. Redis stub is a one-class stub for
+cycle 7 to fill in without touching call sites.
 
 ---
 
