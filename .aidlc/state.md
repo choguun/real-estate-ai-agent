@@ -3,16 +3,14 @@
 - **Phase**: implementing
 - **Branch**: feat/billing-stripe
 - **PR**: (TBD)
-- **Last action**: 2026-07-04T05:00:00Z
-- **Next action**: Run /implement T-401 (billing schema + billing_customers table)
-- **Notes**: Cycle 4 (per-seat billing + Stripe) approved. spec.md + plan.md
-  committed. 7 tasks: T-401 (schema), T-402 (BillingAdapter Protocol + mock),
-  T-403 (/api/billing/* routes), T-404 (plan-limit guard on invites),
-  T-405 (real Stripe adapter + webhook), T-406 (frontend /dashboard/billing),
-  T-407 (test suite + docs/billing.md). 12 ACs (AC-BL-01..12),
-  10 test scenarios (ST-BL-01..10).
-  Plans: starter/growth/team at $0/$29/$99. 14-day Growth trial for
-  new signups. Mock-first; real Stripe wired in T-405.
-  Cycles 1+2+3 merged (#1, #2, #3, #4). Starting T-401.
+- **Last action**: 2026-07-04T05:10:00Z
+- **Next action**: Run /implement T-402 (BillingAdapter Protocol + mock)
+- **Notes**: T-401 done. billing_customers + billing_events tables added;
+  mock enforces UNIQUE constraints; RLS policies ready; teams.plan_limits
+  column added for cheap plan-limit reads. 268 tests pass, coverage 92.36% ✅.
+  Starting T-402: app/adapters/billing/{base,mock,real,factory}.py with
+  the BillingAdapter Protocol (4 methods), MockBillingAdapter (records
+  every call, returns stub URLs), StripeBillingAdapter stub, and 7
+  mock tests + 1 protocol compliance test.
 
-_Updated: 2026-07-04T05:00:00Z_
+_Updated: 2026-07-04T05:10:00Z_
