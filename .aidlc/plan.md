@@ -294,6 +294,13 @@ for ops triage.
 
 **Estimated effort:** S
 
+**Done:** T-603 implementation committed (7d28067).
+**Notes:** Key composition is `team:{team_id}:owner:{user_id}` (per-
+owner, not per-IP, since the owner is authenticated and may move
+between IPs). `record_rate_limited()` extended with optional
+`event_action` override so each call site can use the right
+SIEM-filterable action string. 361 pass total.
+
 ---
 
 ### T-604: Secret rotation helper + audit hook for rate-limit summary
