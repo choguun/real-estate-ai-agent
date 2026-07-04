@@ -135,9 +135,7 @@ class StripeBillingAdapter(BillingAdapter):
         stripe.Webhook.construct_event.
         """
         try:
-            event: Any = Webhook.construct_event(  # type: ignore[no-untyped-call]
-                payload, signature_header, self._webhook_secret
-            )
+            event: Any = Webhook.construct_event(payload, signature_header, self._webhook_secret)
         except ValueError as exc:
             raise ValueError(f"invalid Stripe signature: {exc}") from exc
         except StripeError as exc:
