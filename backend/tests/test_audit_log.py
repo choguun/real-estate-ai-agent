@@ -299,9 +299,7 @@ def test_login_failure_writes_audit_row(client) -> None:
     assert r.status_code == 401, r.text
 
     db = get_db(get_settings())
-    rows = db.query(
-        "security_events", filters={"action": "auth.login.failure"}
-    )
+    rows = db.query("security_events", filters={"action": "auth.login.failure"})
     assert len(rows) >= 1
     row = rows[-1]
     assert row["actor_id"] is None
@@ -382,9 +380,7 @@ def test_accept_invite_writes_audit_row(client) -> None:
     assert r_accept.status_code == 200, r_accept.text
 
     db = get_db(get_settings())
-    rows = db.query(
-        "security_events", filters={"action": "team.accept_invite"}
-    )
+    rows = db.query("security_events", filters={"action": "team.accept_invite"})
     assert len(rows) >= 1
     row = rows[-1]
     assert row["target_id"] == team["id"]
