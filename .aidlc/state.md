@@ -4,7 +4,7 @@
 - **Branch**: feat/rate-limiting
 - **PR**: (TBD)
 - **Last action**: 2026-07-04T11:05:00Z
-- **Next action**: Run /implement T-604 (secret rotation helper)
+- **Next action**: Run /implement T-605 (front-end security headers)
 - **Notes**:
   - 🎉 **Cycle 5 (security hardening: JWT/CORS defaults, audit log,
     RLS gaps) on feat/security-hardening — T-501..T-504 done; T-505

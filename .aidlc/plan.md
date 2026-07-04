@@ -347,7 +347,7 @@ a 6-character stub" bug before it ships.
 - [x] AC-SR-04: `auth_service.decode_token()` calls the rotating helper
 - [x] AC-SR-05: `validate_security()` enforces ≥ 32 bytes on
       `jwt_secret_previous` if set
-- [x] 4 new tests pass
+- [x] 7 new tests pass (4 rotation + 3 validator)
 
 **Test approach:**
 - Unit tests in `test_secret_rotation.py`:
@@ -355,11 +355,18 @@ a 6-character stub" bug before it ships.
   2. token signed with previous → verify OK
   3. token signed with neither → `InvalidTokenError`
   4. malformed token → `InvalidTokenError`
-- Validator test (extension to `test_security_validation.py`):
-  empty `jwt_secret_previous` → OK; 8-byte `jwt_secret_previous`
-  in production → raises
+  5. validator rejects short previous in prod
+  6. validator accepts long previous in prod
+  7. validator allows empty previous in prod
 
 **Estimated effort:** M
+
+**Done:** T-604 implementation committed (bdd3a22).
+**Notes:** `decode_token_rotating()` distinguishes
+`InvalidSignatureError` (wrong secret — try next candidate)
+from other `InvalidTokenError` (expired / malformed / missing
+claim — fail fast, don't waste time trying other secrets).
+368 pass total.
 
 ---
 
