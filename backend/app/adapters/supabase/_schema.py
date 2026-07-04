@@ -65,6 +65,14 @@ def _status_new() -> str:
     return "new"
 
 
+def _status_active() -> str:
+    return "active"
+
+
+def _status_trialing() -> str:
+    return "trialing"
+
+
 def _line_source() -> str:
     return "line"
 
@@ -158,13 +166,14 @@ TEAMS = Table(
         _col("name", "TEXT", nullable=False),
         _col("owner_id", "UUID", nullable=False),
         _col("plan", "TEXT", default=lambda: "starter"),
+        _col("plan_limits", "JSONB"),
         _col("created_at", "TIMESTAMPTZ", default=_now),
         _col("updated_at", "TIMESTAMPTZ", default=_now),
         _col("deleted_at", "TIMESTAMPTZ"),
     ),
 )
 
-# 002_teams.sql: team_memberships join table (NEW for cycle 3)
+# 002_teams.sql: team_memberships join table
 TEAM_MEMBERSHIPS = Table(
     "team_memberships",
     (
@@ -179,7 +188,7 @@ TEAM_MEMBERSHIPS = Table(
     unique_constraints=(("team_id", "user_id"),),
 )
 
-# 002_teams.sql: team_invitations (NEW for cycle 3)
+# 002_teams.sql: team_invitations
 TEAM_INVITATIONS = Table(
     "team_invitations",
     (
@@ -195,6 +204,40 @@ TEAM_INVITATIONS = Table(
         _col("accepted_by", "UUID"),
     ),
     unique_constraints=(("token",),),
+)
+
+# 003_billing.sql: billing_customers (NEW — cycle 4)
+BILLING_CUSTOMERS = Table(
+    "billing_customers",
+    (
+        _col("team_id", "UUID", nullable=False, default=_uuid),
+        _col("stripe_customer_id", "TEXT"),
+        _col("stripe_subscription_id", "TEXT"),
+        _col("plan", "TEXT", default=lambda: "starter"),
+        _col("status", "TEXT", default=_status_trialing),
+        _col("current_period_start", "TIMESTAMPTZ"),
+        _col("current_period_end", "TIMESTAMPTZ"),
+        _col("cancel_at_period_end", "BOOLEAN", default=_false),
+        _col("trial_ends_at", "TIMESTAMPTZ"),
+        _col("created_at", "TIMESTAMPTZ", default=_now),
+        _col("updated_at", "TIMESTAMPTZ", default=_now),
+    ),
+    unique_constraints=(("team_id",), ("stripe_customer_id",), ("stripe_subscription_id",)),
+)
+
+# 003_billing.sql: billing_events (NEW — cycle 4)
+BILLING_EVENTS = Table(
+    "billing_events",
+    (
+        _col("id", "UUID", nullable=False, default=_uuid),
+        _col("team_id", "UUID"),
+        _col("stripe_event_id", "TEXT", nullable=False),
+        _col("event_type", "TEXT", nullable=False),
+        _col("payload", "JSONB", nullable=False),
+        _col("received_at", "TIMESTAMPTZ", default=_now),
+        _col("processed_at", "TIMESTAMPTZ"),
+    ),
+    unique_constraints=(("stripe_event_id",),),
 )
 
 PROPERTIES = Table(
@@ -252,6 +295,7 @@ MESSAGES = Table(
         _col("id", "UUID", nullable=False, default=_uuid),
         _col("lead_id", "UUID"),
         _col("user_id", "UUID", nullable=False),
+        _col("team_id", "UUID"),
         _col("direction", "TEXT"),
         _col("message_type", "TEXT", default=_text_type),
         _col("content", "TEXT"),
@@ -348,8 +392,10 @@ DEFAULT_SCHEMA = Schema(
     (
         USERS,
         TEAMS,
-        TEAM_MEMBERSHIPS,  # NEW (cycle 3)
-        TEAM_INVITATIONS,  # NEW (cycle 3)
+        TEAM_MEMBERSHIPS,
+        TEAM_INVITATIONS,
+        BILLING_CUSTOMERS,  # NEW (cycle 4)
+        BILLING_EVENTS,  # NEW (cycle 4)
         PROPERTIES,
         LEADS,
         MESSAGES,
