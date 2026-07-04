@@ -246,6 +246,12 @@ can detect "IP X hit the rate limit 100 times today" patterns.
 
 **Estimated effort:** M
 
+**Done:** T-602 implementation committed (8e5eb53).
+**Notes:** Brought cycle 5 forward via merge commit. Added autouse
+fixture `_reset_rate_limiter_between_tests` in conftest.py so
+each test starts with fresh rate-limit state (the shared
+singleton otherwise leaks state across tests). 359 pass total.
+
 ---
 
 ### T-603: Invitation rate-limit
