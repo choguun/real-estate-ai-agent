@@ -73,6 +73,7 @@ class Settings(BaseSettings):
     ai_provider: str = "anthropic"
 
     jwt_secret: str = "dev-jwt-secret-change-me"
+    jwt_secret_previous: str = ""  # cycle 6 T-604: rollover window
     jwt_algorithm: str = "HS256"
     jwt_alg: str = "HS256"
     var_dir: str = "var"
@@ -115,11 +116,13 @@ class Settings(BaseSettings):
         from app.security_validation import (
             validate_cors_origins,
             validate_jwt_secret,
+            validate_jwt_secret_previous,
             validate_line_channel_secret,
             validate_stripe_api_key,
         )
 
         validate_jwt_secret(self.jwt_secret, env=self.env)
+        validate_jwt_secret_previous(self.jwt_secret_previous, env=self.env)
         validate_cors_origins(self.cors_origins, env=self.env)
         validate_line_channel_secret(self.line_channel_secret, env=self.env)
         validate_stripe_api_key(self.stripe_api_key, use_mocks=self.use_mocks, env=self.env)

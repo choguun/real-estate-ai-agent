@@ -85,14 +85,15 @@ def create_access_token(
 
 
 def decode_token(token: str, settings: Settings) -> dict[str, Any]:
-    """Decode + verify a JWT. Raises `jwt.PyJWTError` subclasses on bad input."""
-    payload: dict[str, Any] = jwt.decode(
-        token,
-        settings.jwt_secret,
-        algorithms=[settings.jwt_alg],
-        options={"require": ["exp", "iat", "sub"]},
-    )
-    return payload
+    """Decode + verify a JWT. Raises `jwt.PyJWTError` subclasses on bad input.
+
+    Cycle 6 T-604: delegates to `decode_token_rotating()` so tokens
+    signed with either the current OR previous JWT secret verify
+    (zero-downtime secret rotation).
+    """
+    from app.secret_rotation import decode_token_rotating
+
+    return decode_token_rotating(token, settings)
 
 
 # ─── Service ────────────────────────────────────────────────────────────

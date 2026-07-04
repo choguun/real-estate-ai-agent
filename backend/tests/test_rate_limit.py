@@ -217,6 +217,6 @@ def test_in_memory_limiter_thread_safe_smoke() -> None:
     for t in threads:
         t.join(timeout=30)
 
-    assert allowed_count == 50, (
-        f"thread-safety broken: {allowed_count} calls allowed (expected exactly 50)"
-    )
+    assert (
+        allowed_count == 50
+    ), f"thread-safety broken: {allowed_count} calls allowed (expected exactly 50)"

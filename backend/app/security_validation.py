@@ -182,3 +182,42 @@ def validate_stripe_api_key(value: str, *, use_mocks: bool, env: str) -> None:
         )
     # Otherwise assume it's a real key. We don't validate the format
     # further because Stripe's key format may change.
+
+
+def validate_jwt_secret_previous(value: str, *, env: str) -> None:
+    """Raise ValueError if the previous JWT secret is unsafe for `env`.
+
+    Used during the rollover window (cycle 6 T-604). An empty
+    string means "no rotation in progress" and is always OK.
+    A non-empty value must be ≥ 32 bytes — same standard as the
+    primary `JWT_SECRET`.
+
+    Why a separate validator: the cycle-5 `validate_jwt_secret`
+    is keyed on `jwt_secret` (the default). The previous secret
+    has different semantics (optional + usually short-lived) so
+    it gets its own check rather than overloading the existing
+    one.
+
+    Args:
+        value: The candidate `JWT_SECRET_PREVIOUS` string. May
+            be empty (means "no rotation in progress").
+        env: The current `ENV` value.
+
+    Raises:
+        ValueError: If `value` is non-empty in a non-dev environment
+            and is shorter than 32 bytes.
+    """
+    if not value:
+        # Empty means "no rotation" — always allowed.
+        return
+    if _is_dev_or_test(env):
+        return
+    byte_len = len(value.encode("utf-8"))
+    if byte_len < _MIN_JWT_SECRET_BYTES:
+        raise ValueError(
+            f"JWT_SECRET_PREVIOUS must be at least {_MIN_JWT_SECRET_BYTES} bytes "
+            f"when set in a non-dev environment (RFC 7518 §3.2 for HS256); "
+            f"got {byte_len} byte{'s' if byte_len != 1 else ''}. "
+            "Either clear it (no rotation in progress) or set it to a "
+            "32+ byte secret."
+        )

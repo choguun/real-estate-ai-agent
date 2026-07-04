@@ -309,9 +309,9 @@ def test_invite_rate_limited_after_20_attempts(client: TestClient) -> None:
                 f"/api/teams/{team['id']}/invitations",
                 json={"email": f"invitee-{i}@example.com", "role": "agent"},
             )
-            assert r.status_code == 201, (
-                f"invitation {i + 1} should succeed; got {r.status_code}: {r.text}"
-            )
+            assert (
+                r.status_code == 201
+            ), f"invitation {i + 1} should succeed; got {r.status_code}: {r.text}"
         # 21st is rate-limited
         r21 = c.post(
             f"/api/teams/{team['id']}/invitations",
@@ -381,9 +381,9 @@ def test_invite_rate_limit_emits_audit_row(client: TestClient) -> None:
                 f"/api/teams/{team['id']}/invitations",
                 json={"email": f"invitee-{i}@example.com", "role": "agent"},
             )
-            assert r.status_code == 201, (
-                f"invitation {i + 1} should succeed; got {r.status_code}: {r.text}"
-            )
+            assert (
+                r.status_code == 201
+            ), f"invitation {i + 1} should succeed; got {r.status_code}: {r.text}"
         # 21st triggers the audit row
         r21 = c.post(
             f"/api/teams/{team['id']}/invitations",
