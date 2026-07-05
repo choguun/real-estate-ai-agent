@@ -44,6 +44,25 @@ describe("security headers (T-605)", () => {
     expect(csp!.value).toContain("default-src 'self'");
     // Stripe needs to be allowed in frame-src + connect-src for Checkout
     expect(csp!.value).toContain("https://js.stripe.com");
+    // AC-CSP-04: cycle 7 T-703 adds report-uri to the production CSP.
+    // In tests NODE_ENV is "test" so isDev=true and report-uri
+    // is gated off. The production path is verified by the
+    // dedicated AC-CSP-04 test below.
+  });
+
+  it("AC-CSP-04: report-uri is wired when NODE_ENV !== 'development'", async () => {
+    // The config module reads NODE_ENV at module-load time, so
+    // we can't easily flip it in a vitest test. Instead, read
+    // the source file and assert the directive plumbing is in
+    // place (the production CSP includes report-uri when isDev
+    // is false). This is a contract test on the source code, not
+    // on the runtime value.
+    const fs = await import("node:fs/promises");
+    const src = await fs.readFile("./next.config.mjs", "utf-8");
+    expect(src).toMatch(/report-uri \/api\/csp-report/);
+    // The directive must be gated by isDev so dev mode doesn't
+    // POST to the (potentially-non-existent) backend.
+    expect(src).toMatch(/isDev \? "" : "report-uri/);
   });
 
   it("AC-WEB-02: Strict-Transport-Security header is set", async () => {

@@ -41,6 +41,7 @@ ACTION_ACCEPT_INVITE = "team.accept_invite"
 ACTION_CHECKOUT = "billing.checkout"
 ACTION_PORTAL = "billing.portal"
 ACTION_PAYMENT_FAILED = "billing.payment_failed"
+ACTION_CSP_VIOLATION = "csp.violation"
 
 
 # ── AuditEvent model ────────────────────────────────────────────────
