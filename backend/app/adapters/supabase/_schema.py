@@ -419,6 +419,30 @@ SECURITY_EVENTS = Table(
 )
 
 
+# 007_mfa.sql: TOTP MFA (NEW — cycle 8 T-801)
+USER_MFA = Table(
+    "user_mfa",
+    (
+        _col("user_id", "UUID", nullable=False, default=_uuid),
+        _col("secret_encrypted", "TEXT", nullable=False),
+        _col("enrolled_at", "TIMESTAMPTZ", nullable=False, default=_now),
+        _col("last_verified_step", "INT"),
+    ),
+    unique_constraints=(("user_id",),),
+)
+
+MFA_RECOVERY_CODES = Table(
+    "mfa_recovery_codes",
+    (
+        _col("id", "UUID", nullable=False, default=_uuid),
+        _col("user_id", "UUID", nullable=False, default=_uuid),
+        _col("code_hash", "TEXT", nullable=False),
+        _col("used_at", "TIMESTAMPTZ"),
+        _col("created_at", "TIMESTAMPTZ", nullable=False, default=_now),
+    ),
+)
+
+
 DEFAULT_SCHEMA = Schema(
     (
         USERS,
@@ -437,5 +461,7 @@ DEFAULT_SCHEMA = Schema(
         AUDIT_LOGS,
         SECURITY_EVENTS,  # NEW (cycle 5)
         TEAM_RATE_LIMITS,  # NEW (cycle 7)
+        USER_MFA,  # NEW (cycle 8)
+        MFA_RECOVERY_CODES,  # NEW (cycle 8)
     )
 )

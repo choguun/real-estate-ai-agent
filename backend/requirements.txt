@@ -12,6 +12,12 @@ PyJWT==2.10.1
 httpx==0.28.1
 stripe==15.3.0
 
+# Cycle 8 T-801: TOTP MFA deps.
+# cryptography: Fernet for at-rest TOTP secret encryption.
+# pyotp: RFC 6238 TOTP algorithm + verify.
+cryptography>=42.0.0
+pyotp>=2.9.0
+
 # Cycle 7 T-701: distributed rate limiter (optional dep)
 redis>=5.0.0
 

@@ -221,3 +221,36 @@ def validate_jwt_secret_previous(value: str, *, env: str) -> None:
             "Either clear it (no rotation in progress) or set it to a "
             "32+ byte secret."
         )
+
+
+def validate_mfa_encryption_key(value: str, *, env: str) -> None:
+    """Raise ValueError if the MFA encryption key is unsafe for `env`.
+
+    Cycle 8 T-801: the TOTP secret is Fernet-encrypted at rest. In
+    non-dev environments, the key must be a valid 32-byte Fernet
+    key (44 chars of URL-safe base64). An empty key means "TOTP
+    disabled" (the cycle-8 test suite uses this) so it's only
+    OK in dev/test environments.
+
+    To generate a real key:
+        python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    """
+    if not value:
+        if _is_dev_or_test(env):
+            return
+        raise ValueError(
+            "MFA_ENCRYPTION_KEY is empty in a non-dev environment; "
+            "refusing to start. Generate one with: "
+            'python -c "from cryptography.fernet import Fernet;'
+            ' print(Fernet.generate_key().decode())"'
+        )
+    if _is_dev_or_test(env):
+        return
+    if len(value) < 44:
+        raise ValueError(
+            f"MFA_ENCRYPTION_KEY must be a 32-byte Fernet key "
+            f"(44 chars of URL-safe base64); got {len(value)} chars. "
+            "Generate one with: "
+            'python -c "from cryptography.fernet import Fernet;'
+            ' print(Fernet.generate_key().decode())"'
+        )

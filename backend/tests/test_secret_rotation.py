@@ -130,7 +130,11 @@ def test_validator_accepts_long_jwt_secret_previous_in_production() -> None:
         "line_channel_secret": "real-line-secret-32-bytes-long-1234",
         "cors_origins": ["https://app.example.com"],
     }
-    s = Settings(**base, jwt_secret_previous="p" * 32)
+    s = Settings(
+        **base,
+        mfa_encryption_key="v" * 44,
+        jwt_secret_previous="p" * 32,
+    )
     s.validate_security()  # should not raise
 
 
@@ -142,5 +146,5 @@ def test_validator_allows_empty_jwt_secret_previous() -> None:
         "line_channel_secret": "real-line-secret-32-bytes-long-1234",
         "cors_origins": ["https://app.example.com"],
     }
-    s = Settings(**base, jwt_secret_previous="")
+    s = Settings(**base, mfa_encryption_key="v" * 44, jwt_secret_previous="")
     s.validate_security()  # should not raise

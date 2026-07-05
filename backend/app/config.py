@@ -104,6 +104,12 @@ class Settings(BaseSettings):
     # "memory" (default) is single-process; fine for dev / single-pod.
     rate_limit_backend: str = "memory"
     redis_url: str = "redis://localhost:6379/0"
+    # ── Cycle 8 T-801: MFA TOTP encryption key ──
+    # 32-byte URL-safe base64-encoded Fernet key. Generate with:
+    #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # Empty default = dev mode (T-501's `validate_mfa_encryption_key`
+    # accepts empty in dev; production requires a real key).
+    mfa_encryption_key: str = ""
 
     # ── Cycle 5 T-501 fail-fast validators ──
     # Call `settings.validate_security()` after construction (or from
@@ -123,11 +129,13 @@ class Settings(BaseSettings):
             validate_jwt_secret,
             validate_jwt_secret_previous,
             validate_line_channel_secret,
+            validate_mfa_encryption_key,
             validate_stripe_api_key,
         )
 
         validate_jwt_secret(self.jwt_secret, env=self.env)
         validate_jwt_secret_previous(self.jwt_secret_previous, env=self.env)
+        validate_mfa_encryption_key(self.mfa_encryption_key, env=self.env)
         validate_cors_origins(self.cors_origins, env=self.env)
         validate_line_channel_secret(self.line_channel_secret, env=self.env)
         validate_stripe_api_key(self.stripe_api_key, use_mocks=self.use_mocks, env=self.env)

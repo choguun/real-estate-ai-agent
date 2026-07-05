@@ -153,6 +153,7 @@ def test_settings_validate_raises_on_production_wildcard_cors() -> None:
         env="production",
         jwt_secret="x" * 32,
         line_channel_secret="real-secret-32-bytes-long-real-secret",
+        mfa_encryption_key="v" * 44,
         cors_origins=["*"],
     )
     with pytest.raises(ValueError, match="CORS_ORIGINS"):
