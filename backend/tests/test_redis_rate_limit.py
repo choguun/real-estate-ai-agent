@@ -59,7 +59,7 @@ def test_redis_limiter_allows_under_limit(fake_redis: fakeredis.FakeRedis) -> No
     )
     for i in range(5):
         result = limiter.allow(key="1.2.3.4", action="auth.login")
-        assert result.allowed is True, f"call {i+1} should be allowed"
+        assert result.allowed is True, f"call {i + 1} should be allowed"
         assert result.remaining == 5 - (i + 1)
 
 

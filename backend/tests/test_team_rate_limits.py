@@ -237,7 +237,7 @@ def test_team_override_lowers_invite_cap(app, db: SupabaseAdapter) -> None:
                 json={"email": f"invitee-{i}@example.com", "role": "agent"},
             )
             assert inv.status_code == 201, (
-                f"invite {i+1} should succeed under override; got " f"{inv.status_code}: {inv.text}"
+                f"invite {i + 1} should succeed under override; got {inv.status_code}: {inv.text}"
             )
         r4 = c.post(
             f"/api/teams/{team['id']}/invitations",

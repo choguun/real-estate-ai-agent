@@ -85,9 +85,9 @@ def test_005_migration_does_not_grant_cross_team_writes() -> None:
         # Either WITH CHECK clause references team_id, OR the policy
         # constrains via user_id = auth.uid() (the leave case).
         body_normalized = body.lower()
-        assert (
-            "team_id" in body_normalized or "user_id = auth.uid" in body_normalized
-        ), f"{verb} policy has no team_id or self-user_id guard:\n{body}"
+        assert "team_id" in body_normalized or "user_id = auth.uid" in body_normalized, (
+            f"{verb} policy has no team_id or self-user_id guard:\n{body}"
+        )
 
 
 def test_005_migration_uses_drop_policy_if_exists_idempotency() -> None:
@@ -103,6 +103,6 @@ def test_005_migration_uses_drop_policy_if_exists_idempotency() -> None:
     )
     creates = re.findall(r"CREATE POLICY\s+\w+", sql_no_comments, re.IGNORECASE)
     drops = re.findall(r"DROP POLICY IF EXISTS", sql_no_comments, re.IGNORECASE)
-    assert len(creates) == len(
-        drops
-    ), f"mismatch: {len(creates)} CREATE POLICY vs {len(drops)} DROP POLICY IF EXISTS"
+    assert len(creates) == len(drops), (
+        f"mismatch: {len(creates)} CREATE POLICY vs {len(drops)} DROP POLICY IF EXISTS"
+    )

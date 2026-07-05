@@ -61,9 +61,7 @@ async def csp_report(request: Request, supabase: DBDep) -> Response:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     if not isinstance(payload, dict):
-        logger.warning(
-            "csp_report: payload not a dict (got %s)", type(payload).__name__
-        )
+        logger.warning("csp_report: payload not a dict (got %s)", type(payload).__name__)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     report = payload.get("csp-report")
