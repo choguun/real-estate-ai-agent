@@ -270,18 +270,28 @@ So:
 - [x] AC-TRL-03: `PATCH /api/teams/{id}/rate_limits` updates overrides
       (owner only)
 - [x] AC-TRL-04: per-team overrides apply to team-scoped endpoints
+      (invite_member migrated to use _get_or_build_team_limiter)
 - [x] AC-TRL-05: validator rejects 0 / negative values
-- [x] AC-TRL-06: 8 tests pass
+- [x] AC-TRL-06: 9 tests pass (CRUD + enforcement + admin-only +
+      defaults-fallback + service-layer merge)
 
 **Test approach:**
-- CRUD on the new endpoints (4 tests)
-- Enforcement: team with override=3 hits 429 after 3 invites
-  (not the system default of 20)
-- Admin-only: a non-owner PATCH returns 403
-- Defaults-fallback: a team without an override row gets the
-  system defaults
+- Schema presence (table + columns)
+- GET returns system defaults when no override
+- PATCH updates overrides + returns new values
+- PATCH as non-owner returns 403
+- PATCH validator rejects 0 / negative (422)
+- Enforcement: team with override=3 hits 429 after 3rd invite
+- Defaults-fallback at service layer
 
 **Estimated effort:** M
+
+**Done:** T-702 implementation committed (ed0969c).
+**Notes:** Module-level `_team_limiters` dict caches per-team
+limiters so successive requests share sliding-window state.
+PATCH endpoint invalidates the cache on update. invite_member
+migrated from RateLimiterDep to _get_or_build_team_limiter()
+for per-team enforcement. 386 pass total.
 
 ---
 
