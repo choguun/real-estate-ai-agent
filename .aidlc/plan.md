@@ -347,16 +347,25 @@ The web side:
       `metadata.violated_directive`, `metadata.blocked_uri`
 - [x] AC-CSP-03: returns 204 on malformed bodies (no raise)
 - [x] AC-CSP-04: web CSP adds `report-uri /api/csp-report` in prod
-- [x] AC-CSP-05: 4 backend tests + 3 frontend tests pass
+- [x] AC-CSP-05: 5 backend tests + 4 frontend tests pass (the
+      plan said 4+3; we got 5+4 because the AC-CSP-04 test was
+      added on top)
 
 **Test approach:**
-- Backend: parse standard report, parse malformed report
-  (returns 204), parse missing-field report (defaults to "unknown"),
-  parse no-body report (returns 204)
-- Frontend: helper builds the right body shape, sends to the
-  right endpoint, handles fetch errors silently
+- Backend: parse standard report, parse minimal report (defaults
+  to "unknown"), parse malformed body (returns 204), parse
+  empty body (returns 204), constant contract
+- Frontend: helper builds the right body shape, fetch errors
+  swallowed, non-204 responses swallowed, AC-CSP-04 source check
 
 **Estimated effort:** S
+
+**Done:** T-703 implementation committed (da48986).
+**Notes:** Best-effort contract: fetch errors + DB errors + parse
+errors all return 204 silently. The browser should never see a
+CSP report failure escalate into a console error or page-level
+alert. `keepalive: true` on the fetch so the report survives
+page unloads. 391 backend + 44 web tests.
 
 ---
 
