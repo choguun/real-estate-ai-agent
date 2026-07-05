@@ -163,15 +163,22 @@ The factory picks based on `Settings.rate_limit_backend`:
       `rate_limit_backend=redis`
 - [x] AC-DRL-04: uses sorted sets + EXPIRE
 - [x] AC-DRL-05: fails open on Redis error
-- [x] AC-DRL-06: 8 tests pass via fakeredis
+- [x] AC-DRL-06: 9 tests pass via fakeredis
 
 **Test approach:**
 - `fakeredis.FakeRedis()` for in-process Redis simulation
-- 8 tests covering: allow-under-limit, deny-over-limit, per-key
-  isolation, window expiry, fail-open on Redis error, EXPIRE TTL,
-  concurrent writers don't overshoot, action-policy independence
+- 9 tests covering: isinstance + allow-under-limit + deny-over-
+  limit + per-key isolation + window expiry + action-policy
+  independence + fail-open on Redis error + EXPIRE TTL + unknown-
+  action defensive default
 
 **Estimated effort:** M
+
+**Done:** T-701 implementation committed (3a98dfe).
+**Notes:** Lazy-import of redis-py so dev/laptop setups without
+Redis don't need the dep installed. Keyspace prefix 'rl:' keeps
+state separate. EXPIRE = window + 60s buffer for clock-skew slack.
+377 pass total.
 
 ---
 
