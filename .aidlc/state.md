@@ -1,42 +1,33 @@
 # AIDLC State
 
-- **Phase**: shipped
-- **Branch**: main
-- **PR**: #7 (merged 2026-07-05T07:31:55Z)
-- **Last action**: 2026-07-05T07:31:55Z
-- **Next action**: cycle 8 (MFA / WebAuthn OR split prod/dev deps + cycle-6 P2s)
+- **Phase**: specifying
+- **Branch**: feat/mfa-totp
+- **PR**: (TBD)
+- **Last action**: 2026-07-05T08:00:00Z
+- **Next action**: Run /plan to break cycle-8 spec into tasks
 - **Notes**:
-  - 🎉 **Cycle 7 (operational security polish) shipped via PR #7 (squash-merged)**
-  - Merged at `4df6252` to main
-  - **T-701: Redis-backed rate limiter** (real impl of cycle-6
-    stub; unblocks multi-pod deploys)
-  - **T-702: Per-team rate-limit thresholds** (team_rate_limits
-    table + GET/PATCH endpoints; owner-only; ≥ 1 enforced)
-  - **T-703: CSP violation reporting** (POST /api/csp-report +
-    web client helper + report-uri directive)
-  - **T-704: docs/security.md cycle-7 addendum** (263 lines
-    covering Redis ops + per-team admin guide + CSP reporting
-    ops + cycle-7 cross-references)
-  - **Final verification (post-cycle-7):**
-    - Backend: 391 pass, 12 skipped, 0 failed ✅
-    - Frontend: 44 vitest pass ✅
-    - Coverage: ≥ 92% (preserves ≥ 80% gate) ✅
-    - ruff + ruff-format + mypy strict: clean ✅
-    - web typecheck (tsc): clean ✅
-    - GitHub Actions CI: backend ✅ + frontend ✅
-  - 17 ACs across 3 groups (AC-DRL, AC-TRL, AC-CSP) + AC-DOC-01
-    + 4 AC-REG all met
-  - 17 commits squashed into 1 (PR #7 squash-merge)
-  - Branch `feat/cycle-7-operational-polish` deleted
-  - **6 P2 warnings from review** (all advisory, non-blocking):
-    - T-706 migration 006 missing DELETE policy (cycle-8 polish)
-    - `_get_or_build_team_limiter` module-level cache needs
-      autouse-fixture reset (test isolation)
-    - `web/lib/csp_report.ts` docstring claims wiring that
-      doesn't exist (cycle-8 polish)
-    - `/api/csp-report` unauthenticated + no rate limit
-      (cycle-8 polish per spec)
-    - `time.time()` patch path in Redis limiter (cycle-8 polish)
-    - `InMemoryRateLimiter` `buckets` param only used by T-702
+  - 🎉 **Cycle 7 shipped via PR #7 (squash-merged)** at `4df6252`,
+    state-update at `5a5d82b`. 391 backend + 44 web tests.
+  - 🚧 **Cycle 8 spec drafted** — TOTP MFA (Multi-Factor
+    Authentication):
+    - T-801: TOTP secret storage (Fernet-encrypted at rest,
+      migration 007_mfa.sql with user_mfa + mfa_recovery_codes
+      tables + RLS)
+    - T-802: POST /api/auth/mfa/enroll + /api/auth/mfa/verify
+      endpoints (idempotent enroll + verify + 10 recovery codes)
+    - T-803: Login flow integration (mfa_required flag +
+      mfa_token short-lived exchange + brute-force protection
+      via cycle-7's RateLimiter)
+    - T-804: Frontend MFA setup page (QR code + verify form
+      + recovery code display)
+    - T-805: docs/security.md cycle-8 addendum + final verify
+  - 24 ACs across 5 groups (AC-MFA-01..24) — covers enrollment,
+    verify, login flow, recovery codes, disable, audit, frontend,
+    docs, regression
+  - 6 open questions (all recommendations logged in spec)
+  - **Deferred to cycle 9+**: WebAuthn/FIDO2, per-team MFA
+    enforcement, SMS/email OTP, GDPR export, one-shot JWT
+    rotation tool, split prod/dev deps, cycle-6 P2s
+  - See commit `fb4390b` for full spec.
 
-_Updated: 2026-07-05T07:31:55Z_
+_Updated: 2026-07-05T08:00:00Z_
