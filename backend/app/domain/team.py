@@ -104,3 +104,32 @@ class InvitationAcceptOut(BaseModel):
 
 # Late import to resolve the forward ref
 from app.domain.user import User  # noqa: E402,F401  (intentional late import)
+
+
+class TeamRateLimitsOut(BaseModel):
+    """Effective rate-limit policy for a team.
+
+    Returned by GET /api/teams/{id}/rate_limits. Each value is
+    either the team's override OR the system default (5 / 5 / 20).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    login_per_15min: int = Field(ge=1)
+    signup_per_hour: int = Field(ge=1)
+    invite_per_hour: int = Field(ge=1)
+
+
+class TeamRateLimitsPatchIn(BaseModel):
+    """PATCH /api/teams/{id}/rate_limits payload.
+
+    All fields are optional. At least one is required (enforced by
+    the router — an empty patch returns 422). Each value must be
+    ≥ 1 (Pydantic Field validator).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    login_per_15min: int | None = Field(default=None, ge=1)
+    signup_per_hour: int | None = Field(default=None, ge=1)
+    invite_per_hour: int | None = Field(default=None, ge=1)

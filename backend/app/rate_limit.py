@@ -95,7 +95,12 @@ class InMemoryRateLimiter:
     deployments, swap in `RedisRateLimiter` via the factory.
     """
 
-    def __init__(self, *, limits: dict[str, RateLimitPolicy]) -> None:
+    def __init__(
+        self,
+        *,
+        limits: dict[str, RateLimitPolicy],
+        buckets: dict[tuple[str, str], deque[float]] | None = None,
+    ) -> None:
         """Build the limiter with a per-action policy map.
 
         Args:
@@ -103,9 +108,17 @@ class InMemoryRateLimiter:
                 allowed through (defensive: cycle 6 ships 3 actions;
                 a future action that forgot to register doesn't
                 accidentally rate-limit everyone to zero).
+            buckets: Optional shared buckets dict. Use this when you
+                need to share sliding-window state across multiple
+                `InMemoryRateLimiter` instances (cycle 7 T-702: per-
+                team limiters built per-request share state via this
+                dict, so a team that hits its limit on request 1
+                is still rate-limited on request 2).
         """
         self._limits = limits
-        self._buckets: dict[tuple[str, str], deque[float]] = defaultdict(deque)
+        self._buckets: dict[tuple[str, str], deque[float]] = (
+            buckets if buckets is not None else defaultdict(deque)
+        )
         self._lock = threading.RLock()
 
     def _now(self) -> float:
