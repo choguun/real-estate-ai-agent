@@ -1,79 +1,73 @@
-# Spec: Cycle 7 — Operational Security Polish
+# Spec: Cycle 8 — TOTP MFA (Multi-Factor Authentication)
 
 > **Status:** specifying
-> **Branch:** `feat/cycle-7-operational-polish`
-> **Cycle origin:** Cycle-6 review P2 warnings + cycle-6/cycle-5
-> "Out of Scope" → cycle-7 items.
+> **Branch:** `feat/mfa-totp`
+> **Cycle origin:** Cycle-5 spec explicitly deferred MFA to cycle 7+.
+> Cycle 7 didn't ship it; cycle 8 closes the gap.
 
 ---
 
 ## Objective
 
-Cycles 5 + 6 closed the big security footguns (insecure defaults,
-audit log, rate limiting, secret rotation, front-end headers).
-Cycle 7 polishes what's left: distributed (multi-pod) rate limiting,
-per-team rate-limit thresholds, and CSP violation reporting.
+Today, the only auth factor is "something you know" (the password).
+A stolen password = full account takeover. **MFA adds a second
+factor — "something you have" (a TOTP code from an authenticator
+app)** — that an attacker can't replay even if they have the
+password.
 
-These are the three cycle-7 candidates that **don't require new
-schema** (no migration pain) but **unblock production deploy** in
-ways the cycle-6 work alone doesn't:
+Cycle 8 ships **TOTP-based MFA** (RFC 6238), the most universally
+supported second factor:
 
-1. **Distributed rate limiting** — the `InMemoryRateLimiter` from
-   cycle-6 only works in single-process deploys. Multi-pod
-   Railway / Fly / Render deploys need a Redis backend so the
-   limit is consistent across pods. Cycle-6 already shipped a
-   `RedisRateLimiter` stub; cycle-7 fills it in.
-2. **Per-team rate-limit thresholds** — today every team shares
-   the same 5/15min login cap. A power-user team should be able
-   to opt into stricter limits; an enterprise team should be
-   able to opt into looser ones. New schema + a small admin API.
-3. **CSP violation reporting** — replaces the `'unsafe-inline'`
-   compromise in cycle-6's CSP with a report-uri endpoint. Today
-   any XSS attempt is silently blocked; cycle-7 surfaces the
-   attempts so an ops dashboard can alert.
+- **TOTP** = Time-based One-Time Password. 6-digit codes that
+  rotate every 30 seconds.
+- **Authenticator app** = Google Authenticator, Authy, 1Password,
+  Bitwarden, etc. (any app that supports the standard
+  `otpauth://` URI).
+- **Storage** = the TOTP secret is encrypted at rest with a
+  Fernet key derived from a new env var (`MFA_ENCRYPTION_KEY`).
 
-**Who the user is:** the Thai real-estate agency from cycles 1-6,
-plus any team admin who wants to tune their team's security
-posture. Multi-pod deploys are the trigger for #1; #2 is a product
-gap; #3 is the security polish from cycle-6's review.
+WebAuthn/FIDO2 (hardware keys, passkeys) is a stronger second
+factor but requires browser FIDO2 support + a hardware token;
+TOTP is the right first move. Cycle 9+ can add WebAuthn as a
+layered option.
 
-**Success = after cycle 7 ships:**
+**Who the user is:** the Thai real-estate agency from cycles 1-7.
+They want MFA so a compromised password doesn't end in account
+takeover. Enterprise customers (in the cycle-7 per-team override
+flow) may also want MFA-enforced-for-team in the future; cycle
+8 ships the per-user mechanism, cycle 9+ adds per-team enforcement.
+
+**Success = after cycle 8 ships:**
 
 ```bash
-# 1. Multi-pod deploy: each pod's Redis-backed limiter shares
-#    state via the shared Redis instance. Brute-force on pod A
-#    is rate-limited on pod B (no per-pod whitelist bypass).
-for i in {1..20}; do curl -X POST /api/auth/login -d '...'; done
-# → first 5 fail normally; 6th-20th return 429, regardless of
-#   which pod handles the request.
+# 1. User enables MFA
+# GET /api/auth/mfa/status → {enrolled: false}
+# POST /api/auth/mfa/enroll → {secret: "JBSWY3DPEHPK3PXP", otpauth_url: "otpauth://..."}
+# User scans QR in Google Authenticator
+# POST /api/auth/mfa/verify {code: "123456"} → {ok: true, recovery_codes: ["abc-123", ...]}
+# GET /api/auth/mfa/status → {enrolled: true}
 
-# 2. Team admin sets per-team rate limits
-curl -X PATCH /api/teams/{id}/rate_limits \
-    -H "Authorization: Bearer $OWNER_TOK" \
-    -d '{"login_per_15min": 10, "signup_per_hour": 10}'
-# → team's stricter limit takes effect immediately; future
-#   logins use the new threshold.
+# 2. Login flow requires TOTP after password
+# POST /api/auth/login {email, password} → {mfa_required: true, mfa_token: "..."}  (if enrolled)
+# POST /api/auth/login/mfa {mfa_token, code} → {token, user}     (verify TOTP)
+#                                              OR {recovery_code: "abc-123"}  (use a recovery code)
+# OR POST /api/auth/login {email, password, code: "123456"} → {token, user}     (one-step if code provided)
 
-# 3. CSP violations are reported
-curl -X POST /api/csp-report \
-    -H "Content-Type: application/csp-report" \
-    -d '{"csp-report": {"violated-directive": "script-src 'self'", ...}}'
-# → lands in security_events with action='csp.violation',
-#   metadata.violated_directive set so an ops dashboard can
-#   alert on new violation types.
+# 3. Brute-force protection on TOTP
+# 5 wrong codes in 5 min → 429; reset on correct code
 ```
 
 **Out of scope (explicit):**
-- **MFA / 2FA / WebAuthn** — cycle 8 (biggest product gap; deferred
-  per cycle-5 spec). The cycle-7 audit log already lays the
-  groundwork (TOTP-failed events will slot into the same
-  `security_events` table).
-- **One-shot JWT rotation tool** — cycle 8 (the manual 4-step
-  playbook in `docs/security.md` works; a proper one-shot tool
-  is a polish item).
-- **GDPR data export / right-to-delete** — cycle 8+ (separate
-  product scope).
-- **OAuth provider integration** — out of scope.
+- **WebAuthn / FIDO2 / passkeys** — cycle 9 (layered on top of TOTP;
+  requires browser FIDO2 support + hardware token or platform
+  authenticator)
+- **Per-team MFA enforcement** (require-team-mfa policy) —
+  cycle 9 (needs cycle-7's per-team override flow + a per-team
+  `require_mfa` column)
+- **SMS / email OTP** — explicitly out of scope (SIM-swap attacks
+  on SMS; email is already a single-factor recovery channel)
+- **OAuth provider integration** — out of scope (never)
+- **GDPR data export** — cycle 9+ (separate product scope)
 
 ---
 
@@ -82,17 +76,17 @@ curl -X POST /api/csp-report \
 ```bash
 # New tests
 cd backend
-pytest tests/test_redis_rate_limit.py tests/test_team_rate_limits.py tests/test_csp_report.py -v
+pytest tests/test_mfa.py -v
 
 # Full regression
-pytest -p no:randomly  # 368 → ~400+ tests
+pytest -p no:randomly  # 391 → ~420+ tests
 
 # Lint / format / types
 ruff check app tests
 ruff format --check app tests
 mypy app
 
-# Frontend tests (CSP reporting client)
+# Frontend tests (MFA setup + verify pages)
 cd ../web
 npm test -- --run
 ```
@@ -104,109 +98,100 @@ npm test -- --run
 ```
 backend/
   app/
-    rate_limit.py                  # MOD: add `now()` for time injection
-    redis_rate_limiter.py          # NEW: production Redis impl
-    rate_limit_factory.py          # MOD: env-driven adapter selection
-    config.py                      # MOD: add rate_limit_backend
-                                   #      + new per-team threshold fields
-    deps.py                        # MOD: RateLimitSettingsDep
-    domain/team.py                 # MOD: add TeamRateLimits sub-model
+    mfa.py                       # NEW: TOTP + recovery code helpers
+    audit_log.py                 # MOD: ACTION_MFA_ENROLLED/DISABLED/VERIFIED/FAILED
+    config.py                    # MOD: add mfa_encryption_key
+    security_validation.py       # MOD: validate_mfa_encryption_key()
     routers/
-      teams.py                     # MOD: PATCH /api/teams/{id}/rate_limits
-      csp_report.py                # NEW: POST /api/csp-report
-    audit_log.py                   # MOD: ACTION_CSP_VIOLATION constant
+      auth.py                    # MOD: login flow returns mfa_required + mfa_token
+      mfa.py                     # NEW: /api/auth/mfa/* endpoints
     services/
-      team_service.py              # MOD: get/set per-team rate limits
+      auth.py                    # MOD: mfa_required + mfa_token flow
   migrations/
-    006_team_rate_limits.sql       # NEW: team_rate_limits table + RLS
+    007_mfa.sql                  # NEW: user_mfa + mfa_recovery_codes tables
   tests/
-    test_redis_rate_limit.py       # NEW: 8 tests (uses fakeredis)
-    test_team_rate_limits.py       # NEW: 8 tests (CRUD + enforcement)
-    test_csp_report.py             # NEW: 4 tests (parsing + audit row)
+    test_mfa.py                  # NEW: 12 tests (enroll, verify, recovery,
+                                #       login integration, brute-force protection)
 
 web/
+  app/
+    (app)/dashboard/settings/
+      mfa/page.tsx               # NEW: MFA setup page (QR + verify)
   lib/
-    csp_report.ts                  # NEW: client-side helper that
-                                   #      sends violation reports
+    mfa.ts                       # NEW: client-side helpers
   __tests__/
-    csp_report.test.ts             # NEW: 3 tests
-  next.config.mjs                  # MOD: add report-uri directive
+    mfa.test.ts                  # NEW: 3 tests
+  next.config.mjs                # (unchanged; CSP already in place)
 
 docs/
-  security.md                      # MOD: cycle-7 addendum (Redis ops,
-                                   #      per-team limits, CSP reporting)
+  security.md                    # MOD: cycle-8 addendum (MFA ops)
 ```
 
 ---
 
 ## Code Style
 
-Cycle-7 follows the cycle-5/6 patterns: thin Protocols + glue +
-the same audit-log + DI plumbing.
+Cycle 8 follows the cycle-5/6/7 patterns: thin pydantic models +
+service layer + router glue.
 
-**Good example (Redis rate limiter):**
+**Good example (TOTP enrollment):**
 
 ```python
-# app/redis_rate_limiter.py
-class RedisRateLimiter:
-    """Sliding-window rate limiter backed by Redis sorted sets.
+# app/mfa.py
+import base64
+import os
+from cryptography.fernet import Fernet
 
-    For each (key, action) pair, ZADD the timestamp, ZREMRANGEBYSCORE
-    the expired entries, ZCARD to count. The key has a TTL of
-    window_seconds so memory is bounded.
-    """
-    def __init__(self, *, redis_client: Redis, limits: dict[str, RateLimitPolicy]) -> None:
-        self._redis = redis_client
-        self._limits = limits
+def generate_totp_secret() -> str:
+    """Generate a base32-encoded TOTP secret (160 bits per RFC 6238)."""
+    raw = os.urandom(20)
+    return base64.b32encode(raw).decode("ascii").rstrip("=")
 
-    def allow(self, *, key: str, action: str) -> RateLimitResult:
-        # ... ZADD/ZREMRANGEBYSCORE pipeline; fail-open if Redis is down
+
+def encrypt_secret(plaintext: str, *, fernet: Fernet) -> str:
+    """Encrypt a TOTP secret for at-rest storage."""
+    return fernet.encrypt(plaintext.encode("utf-8")).decode("ascii")
+
+
+def decrypt_secret(ciphertext: str, *, fernet: Fernet) -> str:
+    """Decrypt a TOTP secret for verification."""
+    return fernet.fernet.decrypt(ciphertext.encode("utf-8")).decode("ascii")
 ```
 
-**Good example (per-team overrides):**
+**Good example (MFA login flow):**
 
 ```python
-# app/services/team_service.py
-def get_effective_rate_limits(
-    adapter: SupabaseAdapter, *, team_id: UUID, defaults: RateLimits
-) -> RateLimits:
-    """Return the team's effective rate limits, falling back to defaults.
-
-    A team that hasn't configured overrides gets the system defaults.
-    A team that has gets its overrides merged over the defaults.
-    """
-```
-
-**Good example (CSP report endpoint):**
-
-```python
-# app/routers/csp_report.py
-@router.post("/csp-report")
-async def csp_report(request: Request) -> dict[str, str]:
-    """Receive a CSP violation report from the browser.
-
-    Browser sends Content-Type: application/csp-report with a
-    JSON body of the form {"csp-report": {...}}. We extract the
-    violated-directive + blocked-uri, log an audit row, and return
-    204 No Content so the browser doesn't retry.
-    """
+# Login flow: after password check
+if user.mfa_enrolled:
+    # Issue a short-lived mfa_token (5 min) that the client exchanges
+    # for a JWT after providing the TOTP code.
+    mfa_token = create_mfa_token(user_id, settings)
+    return {"mfa_required": True, "mfa_token": mfa_token}
+# else: existing flow
+return {"user": user, "token": create_access_token(...)}
 ```
 
 ---
 
 ## Testing Strategy
 
-- **Redis rate limiter (8 tests)** — uses `fakeredis` to simulate
-  Redis in-process. Sliding window, multiple keys, action policies,
-  fail-open on Redis outage, EXPIRE TTL, idempotency.
-- **Per-team rate limits (8 tests)** — CRUD on the new endpoint +
-  rate-limit-enforcement-after-override tests + admin-only check.
-- **CSP report (4 tests)** — accepts the standard
-  `application/csp-report` content-type, parses + extracts the
-  violated directive + blocked URI, writes audit row with
-  action='csp.violation'.
-- **Regression**: full 368-test suite stays green.
-- **Coverage**: ≥ 90% preserved.
+- **TOTP helpers (4 tests)** — generate secret shape, encrypt/decrypt
+  round-trip, decrypt with wrong key raises
+- **Enrollment (3 tests)** — POST /api/auth/mfa/enroll returns
+  secret + otpauth URL; second enroll without disabling returns
+  existing secret
+- **Verify (3 tests)** — valid code marks user as enrolled + returns
+  recovery codes; invalid code returns 401; brute-force after 5
+  attempts returns 429
+- **Login integration (2 tests)** — login with password returns
+  mfa_required: true; login with password + TOTP returns full
+  token; recovery code works as fallback
+- **Recovery codes (2 tests)** — generated at enrollment, single-use,
+  regenerated on disable+re-enroll
+- **Audit log (2 tests)** — mfa.enrolled, mfa.disabled, mfa.failed
+  rows in security_events
+- **Regression**: 391 existing tests stay green
+- **Coverage**: ≥ 90% preserved
 
 ---
 
@@ -214,137 +199,177 @@ async def csp_report(request: Request) -> dict[str, str]:
 
 **Always do:**
 - Run `pytest -p no:randomly` before committing
-- Cycle-6's fail-open contract applies to `RedisRateLimiter` too:
-  a Redis outage must NOT block traffic; the limiter returns
-  `allowed=True` and logs `rate_limit redis unavailable`
-- New tests fail first (RED), then minimal code (GREEN), then
-  refactor
-- Audit failures (Redis write failure on the audit row) are
-  swallowed (write_event catches + logs)
+- TOTP secrets encrypted at rest with Fernet (symmetric)
+- Recovery codes are single-use (deleted on consumption)
+- Audit log every MFA event (enroll, verify, fail, disable, use-recovery)
+- Rate-limit TOTP verify (5/min per user)
+- Cycle-5 fail-fast validator runs on `MFA_ENCRYPTION_KEY` (≥ 32 bytes
+  base64-encoded Fernet key in production)
+- TOTP code window: ±1 step (90 seconds total) per RFC 6238 §5.2
 
 **Ask first:**
-- Adding a new dep (`fakeredis`, `redis-py`)
+- Adding a new dep (`cryptography` for Fernet, `pyotp` for TOTP)
 - Changing `Settings` field types or names
 - Touching `migrations/001_init.sql` (cycle 1, frozen)
 
 **Never do:**
-- Block the primary request when Redis is unreachable (fail-open)
-- Make the CSP-report endpoint require auth (browsers can't
-  send auth headers; this must be open + cheap)
-- Use the same Redis client for rate-limit state and the rest
-  of the app (separate keyspace prefix `rl:`)
-- Store per-team overrides in `redis` (they go in Supabase like
-  all team-scoped data)
+- Store TOTP secrets in plaintext (even in dev)
+- Use a non-encrypted column for recovery codes (use a hash)
+- Allow TOTP verification without a valid password first
+- Skip the audit log on MFA events
+- Reuse TOTP codes (RFC 6238 §5.2 recommends tracking used codes
+  to prevent replay within the validity window)
 
 ---
 
 ## Acceptance Criteria
 
-### Distributed rate limiting (Redis)
+### TOTP enrollment
 
-- [ ] **AC-DRL-01** — `RedisRateLimiter` (real impl, not stub) ships
-      and passes `isinstance(r, RateLimiter)`.
-- [ ] **AC-DRL-02** — `Settings.rate_limit_backend: str = "memory"`
-      default; `"redis"` selects the Redis impl.
-- [ ] **AC-DRL-03** — When `rate_limit_backend=redis`, the factory
-      builds `RedisRateLimiter` reading `REDIS_URL` from Settings.
-- [ ] **AC-DRL-04** — Redis backend uses sorted sets
-      (`ZADD timestamp`, `ZREMRANGEBYSCORE expired`, `ZCARD` count)
-      with `EXPIRE = window_seconds` for memory bounding.
-- [ ] **AC-DRL-05** — Redis backend fails-open if the Redis client
-      raises (logs `rate_limit redis unavailable`, returns
-      `allowed=True`).
-- [ ] **AC-DRL-06** — 8 tests pass via `fakeredis`.
+- [ ] **AC-MFA-01** — `migrations/007_mfa.sql` adds a `user_mfa` table
+      with `user_id PRIMARY KEY, secret_encrypted TEXT, enrolled_at,
+      last_used_at` + a `mfa_recovery_codes` table with
+      `id, user_id, code_hash, used_at, created_at`. RLS: row visible
+      only to the owning user.
+- [ ] **AC-MFA-02** — `POST /api/auth/mfa/enroll` returns
+      `{secret, otpauth_url, qr_url}` for the authenticated user.
+      First call generates + stores; subsequent calls return the
+      existing secret (idempotent).
+- [ ] **AC-MFA-03** — The TOTP secret is encrypted at rest using
+      Fernet with `Settings.mfa_encryption_key`. The plaintext
+      secret is never written to the database.
+- [ ] **AC-MFA-04** — `Settings.mfa_encryption_key` is a 32-byte
+      URL-safe base64-encoded Fernet key. `validate_security()` (cycle
+      5) enforces ≥ 32 bytes in production.
 
-### Per-team rate-limit thresholds
+### TOTP verify + login flow
 
-- [ ] **AC-TRL-01** — `migrations/006_team_rate_limits.sql` adds
-      a `team_rate_limits` table with columns `team_id PRIMARY
-      KEY, login_per_15min, signup_per_hour, invite_per_hour,
-      updated_at`. RLS: SELECT/UPDATE for owner of the team.
-- [ ] **AC-TRL-02** — `GET /api/teams/{id}/rate_limits` returns the
-      team's effective limits (override or system default).
-- [ ] **AC-TRL-03** — `PATCH /api/teams/{id}/rate_limits` accepts
-      `{login_per_15min?, signup_per_hour?, invite_per_hour?}`
-      and updates the team's overrides. Owner only.
-- [ ] **AC-TRL-04** — When a team has overrides, the rate limiter
-      uses the team's limits instead of the system defaults.
-- [ ] **AC-TRL-05** — Per-team override must be ≥ 1 (no negative
-      or zero; cycle-7 validators).
-- [ ] **AC-TRL-06** — 8 tests pass: CRUD, enforcement, admin-only,
-      defaults-fallback.
+- [ ] **AC-MFA-05** — `POST /api/auth/mfa/verify {code}` with a
+      valid 6-digit TOTP code marks the user as enrolled, returns
+      10 single-use recovery codes, and writes `mfa.enrolled` to
+      `security_events`.
+- [ ] **AC-MFA-06** — `POST /api/auth/login {email, password}` for a
+      user with `enrolled=true` returns `{mfa_required: true,
+      mfa_token: "..."}` instead of a full JWT. The `mfa_token`
+      is short-lived (5 min) and binds to the user_id.
+- [ ] **AC-MFA-07** — `POST /api/auth/login/mfa {mfa_token, code}`
+      (or `{mfa_token, recovery_code}`) returns the full JWT after
+      verifying the TOTP code or recovery code.
+- [ ] **AC-MFA-08** — `POST /api/auth/login {email, password, code}`
+      is a one-step variant: if the user has MFA and the code is
+      correct, return the full JWT directly. (Convenience for
+      users who know their current TOTP code.)
+- [ ] **AC-MFA-09** — 5 wrong TOTP codes within 5 minutes for the
+      same user → 429 (rate-limited). On correct code, the rate
+      limiter resets.
+- [ ] **AC-MFA-10** — TOTP code is single-use within its 90-second
+      validity window (replay protection per RFC 6238).
 
-### CSP violation reporting
+### Recovery codes
 
-- [ ] **AC-CSP-01** — `POST /api/csp-report` accepts the standard
-      `application/csp-report` content-type and parses the
-      `csp-report` JSON body.
-- [ ] **AC-CSP-02** — The endpoint extracts `violated-directive`
-      + `blocked-uri` and writes one row to `security_events` with
-      `action='csp.violation'`, `metadata={'violated_directive':
-      ..., 'blocked_uri': ...}`.
-- [ ] **AC-CSP-03** — The endpoint returns `204 No Content` (the
-      browser doesn't retry on 204) and never raises on
-      malformed bodies (logs + 204).
-- [ ] **AC-CSP-04** — `web/next.config.mjs` adds
-      `report-uri /api/csp-report` to the CSP header in production.
-- [ ] **AC-CSP-05** — 4 backend tests + 3 frontend tests pass.
+- [ ] **AC-MFA-11** — 10 recovery codes are generated at enrollment.
+      Each is a 10-character alphanumeric string. Stored as a
+      SHA-256 hash (never plaintext).
+- [ ] **AC-MFA-12** — Recovery codes are single-use. `used_at` is
+      set on consumption. Used codes return 401 on re-submit.
+- [ ] **AC-MFA-13** — Re-enrollment (after `DELETE /api/auth/mfa`)
+      regenerates the 10 recovery codes.
+
+### Disable + audit
+
+- [ ] **AC-MFA-14** — `DELETE /api/auth/mfa` requires the current
+      TOTP code OR a recovery code (prevents an attacker with
+      only the password from disabling MFA). Writes `mfa.disabled`
+      to `security_events`.
+- [ ] **AC-MFA-15** — Every MFA event writes to `security_events`:
+      `mfa.enrolled`, `mfa.verified`, `mfa.failed`,
+      `mfa.recovery_used`, `mfa.disabled`. Failed verifications
+      include `metadata.attempted_code_length` (so dashboards
+      can spot length-6 brute-force vs random typos).
+- [ ] **AC-MFA-16** — `GET /api/auth/mfa/status` returns
+      `{enrolled, recovery_codes_remaining}` for the
+      authenticated user (lets the UI show "you have 8 codes
+      left" before they run out).
+
+### Frontend
+
+- [ ] **AC-MFA-17** — `web/app/(app)/dashboard/settings/mfa/page.tsx`
+      shows a QR code (rendered client-side from the otpauth URL)
+      + a verify form. After verify, shows the 10 recovery codes
+      with copy-to-clipboard.
+- [ ] **AC-MFA-18** — The login page adds a step 2 (TOTP code
+      input) when the response is `mfa_required: true`. The
+      password → token flow is unchanged for non-MFA users.
+- [ ] **AC-MFA-19** — 3 frontend tests: QR renders, verify form
+      submits, recovery-code display.
 
 ### Docs + regression
 
-- [ ] **AC-DOC-01** — `docs/security.md` adds a cycle-7 addendum
-      covering Redis ops (provisioning the Redis URL, monitoring
-      Redis latency), per-team admin guide, CSP reporting ops.
-- [ ] **AC-REG-01** — All 368 existing tests still pass.
-- [ ] **AC-REG-02** — `pytest -p no:randomly` reports ≥ 388 tests
-      (368 + ~20 new), ≥ 90% coverage.
-- [ ] **AC-REG-03** — `ruff check` + `ruff format --check` + `mypy
+- [ ] **AC-MFA-20** — `docs/security.md` adds a cycle-8 addendum
+      covering MFA ops (lost-device recovery, recovery code
+      rotation, brute-force detection via audit-log query).
+- [ ] **AC-MFA-21** — All 391 existing tests still pass.
+- [ ] **AC-MFA-22** — `pytest -p no:randomly` reports ≥ 415 tests
+      (391 + ~24 new), ≥ 90% coverage.
+- [ ] **AC-MFA-23** — `ruff check` + `ruff format --check` + `mypy
       app/` all clean.
-- [ ] **AC-REG-04** — `npm run typecheck` + `npm test` clean.
+- [ ] **AC-MFA-24** — `npm run typecheck` + `npm test` clean.
 
 ---
 
 ## Out of Scope
 
-- **MFA / 2FA / WebAuthn** — cycle 8 (biggest product gap; deferred
-  per cycle-5 spec)
-- **One-shot JWT secret rotation tool** — cycle 8 (the manual
-  4-step playbook in `docs/security.md` works)
-- **GDPR data export / right-to-delete** — cycle 8+ (separate
-  product scope)
-- **OAuth provider integration** — out of scope
-- **CSP nonce-based upgrade** — cycle 8+ (the report-uri in cycle 7
-  collects the data needed to make nonce-based safe)
+- **WebAuthn / FIDO2 / passkeys** — cycle 9 (layered on TOTP)
+- **Per-team MFA enforcement** (require-team-mfa policy) —
+  cycle 9 (uses cycle-7's per-team override flow + a per-team
+  `require_mfa` column on `team_rate_limits` or a new
+  `team_security_policies` table)
+- **SMS / email OTP** — explicitly out of scope (SIM-swap, etc.)
+- **OAuth provider integration** — out of scope (never)
+- **GDPR data export** — cycle 9+ (separate product scope)
+- **One-shot JWT rotation tool** — cycle 9 (cycle-7's manual
+  4-step playbook works)
+- **Split prod/dev deps** (cycle-7 review housekeeping) —
+  cycle 9
+- **Cycle-6 P2s** (`event_action: Literal[...]`, autouse fixture
+  redundancy, `decode_token` rename) — cycle 9 polish
 
 ---
 
 ## Open Questions
 
-1. **Q: Should the per-team rate limits be a separate `Settings`
-   row, or stored in the `teams` table?** Recommend: **separate
-   `team_rate_limits` table** with a `team_id PRIMARY KEY` FK
-   to `teams`. A team without overrides is a row-less lookup
-   that falls back to the system defaults. Mirrors the
-   cycle-4 `billing_customers` pattern.
+1. **Q: Should the TOTP secret be visible to the user after
+   enrollment (so they can re-add to a new device), or only
+   shown once at enrollment?** Recommend: **only at enrollment**.
+   Recovery codes are the second-factor reset path; the secret
+   itself stays internal. Standard practice for TOTP.
 
-2. **Q: For `RedisRateLimiter`, should we use `redis.asyncio`
-   (async) or `redis` (sync)?** Recommend: **sync**, wrapped
-   in `asyncio.to_thread` if the call site is async. Simpler
-   + easier to test + matches the cycle-6 sync signature
-   (`RateLimiter.allow` returns `RateLimitResult`, no await).
+2. **Q: Should the `mfa_token` (the short-lived token issued after
+   password verify, exchanged for a JWT on TOTP verify) use the
+   same JWT secret, or a separate secret?** Recommend: **same
+   secret, different `aud` claim**. The mfa_token has a 5-min TTL
+   and `aud="mfa"` so it can't be used to authenticate regular
+   endpoints. Cycle-6's `decode_token_rotating` is reused.
 
-3. **Q: For the CSP-report endpoint, should the audit row be
-   rate-limited?** A misbehaving browser could spam reports.
-   Recommend: **yes**, with a generous bucket (1000/hour per
-   IP) so a real attack surfaces in audit but a misconfigured
-   extension doesn't 429 the page. Cycle-8 polish.
+3. **Q: For the TOTP `step` value (RFC 6238), use 30 seconds
+   (default) or 60 seconds (more user-friendly)?** Recommend:
+   **30 seconds**. Standard. Compatible with all major
+   authenticator apps.
 
-4. **Q: Should the per-team PATCH return the new effective
-   limits or just 204?** Recommend: **return the new effective
-   limits**. Admin endpoints that return state make UIs simpler.
+4. **Q: For the recovery code alphabet, use alphanumeric
+   (a-zA-Z0-9) or lowercase + digits only (no I/0/1 confusion)?**
+   Recommend: **lowercase + digits, ambiguous chars removed**
+   (`crockford`-style: no I/L/O/0/1). 10 chars from 28-char
+   alphabet = 28^10 ≈ 1.4e14 combinations per code; 10 codes
+   per user = 1.4e15 total entropy. Strong enough.
 
-5. **Q: Does cycle-7 close the cycle-6 P2 warnings about
-   `event_action: Literal[...]`, autouse fixture redundancy,
-   `decode_token()` rename, rotation rollback?** Recommend:
-   **no, defer to cycle 8**. Those are cosmetic. Cycle 7's
-   scope is "operational polish" not "polish everything".
+5. **Q: For the brute-force protection, what's the rate limit?**
+   Recommend: **5 wrong codes per 5 min per user_id** (not per
+   IP — an attacker with the password also has the user_id from
+   the response). Use the cycle-7 `RateLimiter` infra with a
+   dedicated `mfa.verify` action.
+
+6. **Q: For the frontend MFA setup page, where does it live?**
+   Recommend: `web/app/(app)/dashboard/settings/mfa/page.tsx`
+   (new settings sub-page). Linked from a "Security" section in
+   the existing settings page.
