@@ -409,6 +409,14 @@ Final verification:
 
 **Estimated effort:** S
 
+**Done:** T-704 implementation committed (98aa1e6).
+**Notes:** docs/security.md grows from 374 to 637 lines. Three
+sub-sections: Redis ops (provisioning, monitoring, fail-open
+recovery), per-team admin guide (override rules, rollback,
+audit gap), CSP reporting ops (what a violation looks like,
+when to investigate, 3 dashboard queries). Section 7 adds
+cycle-7 cross-references. Cycle 7 complete: 4/4 tasks.
+
 ---
 
 ## Dependency graph (text form)

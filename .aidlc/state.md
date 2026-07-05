@@ -4,7 +4,7 @@
 - **Branch**: feat/cycle-7-operational-polish
 - **PR**: (TBD)
 - **Last action**: 2026-07-04T17:55:00Z
-- **Next action**: Run /implement T-704 (docs/security.md + final verify)
+- **Next action**: Run /aidlc review + /ship to land cycle 7
 - **Notes**:
   - 🎉 **Cycle 5+6 shipped via PR #6 (squash-merged)** at `1b132ee`,
     state-update at `f9a8e80`. 368 backend + 40 web tests.
