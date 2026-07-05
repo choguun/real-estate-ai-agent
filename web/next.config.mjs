@@ -46,6 +46,9 @@ const securityHeaders = [
       "base-uri 'self'",
       "form-action 'self'",
       "frame-ancestors 'none'",
+      // Cycle 7 T-703: browsers POST violation reports here.
+      // Same-origin so the standard browser fetch path works.
+      isDev ? "" : "report-uri /api/csp-report",
     ]
       .filter(Boolean)
       .join("; "),

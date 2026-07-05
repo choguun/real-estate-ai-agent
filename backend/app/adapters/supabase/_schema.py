@@ -388,6 +388,20 @@ AUDIT_LOGS = Table(
 )
 
 
+# 006_team_rate_limits.sql: per-team overrides (NEW — cycle 7 T-702)
+TEAM_RATE_LIMITS = Table(
+    "team_rate_limits",
+    (
+        _col("team_id", "UUID", nullable=False, default=_uuid),
+        _col("login_per_15min", "INT", nullable=False, default=lambda: 5),
+        _col("signup_per_hour", "INT", nullable=False, default=lambda: 5),
+        _col("invite_per_hour", "INT", nullable=False, default=lambda: 20),
+        _col("updated_at", "TIMESTAMPTZ", nullable=False, default=_now),
+    ),
+    unique_constraints=(("team_id",),),
+)
+
+
 # 004_security_events.sql: append-only audit log (NEW — cycle 5 T-502)
 SECURITY_EVENTS = Table(
     "security_events",
@@ -422,5 +436,6 @@ DEFAULT_SCHEMA = Schema(
         USER_SETTINGS,
         AUDIT_LOGS,
         SECURITY_EVENTS,  # NEW (cycle 5)
+        TEAM_RATE_LIMITS,  # NEW (cycle 7)
     )
 )

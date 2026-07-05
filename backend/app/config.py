@@ -99,6 +99,11 @@ class Settings(BaseSettings):
     rate_limit_login_per_15min: int = 5
     rate_limit_signup_per_hour: int = 5
     rate_limit_invite_per_hour: int = 20
+    # ── Cycle 7 T-701: distributed rate-limit backend selection ──
+    # Set to "redis" in multi-pod prod for cluster-wide limit state.
+    # "memory" (default) is single-process; fine for dev / single-pod.
+    rate_limit_backend: str = "memory"
+    redis_url: str = "redis://localhost:6379/0"
 
     # ── Cycle 5 T-501 fail-fast validators ──
     # Call `settings.validate_security()` after construction (or from

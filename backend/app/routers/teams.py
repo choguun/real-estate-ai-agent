@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 
 from app.adapters.supabase import SupabaseAdapter
-from app.deps import CurrentUserIdDep, DBDep, EmailDep, RateLimiterDep
+from app.deps import CurrentUserIdDep, DBDep, EmailDep
 from app.domain.team import (
     InvitationAcceptIn,
     InvitationAcceptOut,
@@ -19,19 +19,65 @@ from app.domain.team import (
     TeamCreate,
     TeamMemberOut,
     TeamOut,
+    TeamRateLimitsOut,
+    TeamRateLimitsPatchIn,
 )
 from app.domain.user import User  # noqa: E402
+from app.rate_limit import InMemoryRateLimiter
 from app.services.auth import create_access_token, hash_password
 from app.services.team_service import (
     create_team,
     generate_invite_token,
+    get_effective_rate_limits,
     get_user_team,
     list_members,
+    set_team_rate_limits,
     user_is_member,
     user_role_in_team,
 )
 
 router = APIRouter(prefix="/api/teams", tags=["teams"])
+
+
+# ── T-702: per-team rate-limit cache ───────────────────────────────────
+# Module-level dict so per-team limiters built per-request share
+# sliding-window state. Without this, every request creates a fresh
+# limiter with empty buckets, so the rate limit never trips.
+_team_limiters: dict[str, InMemoryRateLimiter] = {}
+_team_limiters_lock = __import__("threading").RLock()
+
+
+def _get_or_build_team_limiter(
+    adapter: SupabaseAdapter, *, team_id: str, eff: dict[str, int]
+) -> InMemoryRateLimiter:
+    """Return (or lazily build) the team's per-team InMemoryRateLimiter.
+
+    Cached so successive requests share sliding-window state. The
+    PATCH endpoint invalidates the cache so overrides take effect
+    immediately (see invalidate_team_limiter).
+    """
+    with _team_limiters_lock:
+        existing = _team_limiters.get(team_id)
+        if existing is not None:
+            return existing
+        from app.rate_limit import InMemoryRateLimiter, RateLimitPolicy
+
+        limiter = InMemoryRateLimiter(
+            limits={
+                "team.invite": RateLimitPolicy(
+                    max_calls=eff["invite_per_hour"],
+                    window_seconds=60 * 60,
+                ),
+            },
+        )
+        _team_limiters[team_id] = limiter
+        return limiter
+
+
+def invalidate_team_limiter(team_id: str) -> None:
+    """Drop the cached limiter for a team (called on PATCH rate-limits)."""
+    with _team_limiters_lock:
+        _team_limiters.pop(team_id, None)
 
 
 def _require_member(adapter: SupabaseAdapter, *, user_id: UUID, team_id: UUID) -> None:
@@ -103,14 +149,21 @@ def invite_member(
     user_id: CurrentUserIdDep,
     supabase: DBDep,
     email_svc: EmailDep,
-    rl: RateLimiterDep,
 ) -> InvitationOut | JSONResponse:
     """Owner invites a teammate by email. Sends an email with the invite link.
 
     Cycle 6 T-603: rate-limit per owner (not per IP — owner is
-    authenticated and may be on a moving IP). 20 invites / hr.
+    authenticated and may be on a moving IP).
+
+    Cycle 7 T-702: limit is the per-team override (if set) or the
+    system default (20/hr). Built per-request from
+    get_effective_rate_limits() — acceptable at current scale
+    (invitations are low-frequency); cycle 8+ can cache.
     """
-    # Cycle 6 T-603: per-owner rate-limit on invitation creation.
+    # Cycle 7 T-702: per-team override + system default fallback.
+
+    eff = get_effective_rate_limits(supabase, team_id=str(team_id))
+    rl = _get_or_build_team_limiter(supabase, team_id=str(team_id), eff=eff)
     rl_result = rl.allow(
         key=f"team:{team_id}:owner:{user_id}",
         action="team.invite",
@@ -439,3 +492,74 @@ def leave_team(
             {"left_at": datetime.now(timezone.utc).isoformat()},
         )
     return Response(status_code=204)
+
+
+# ── T-702: Per-team rate-limit overrides ────────────────────────────
+
+
+@router.get(
+    "/{team_id}/rate_limits",
+    response_model=TeamRateLimitsOut,
+)
+def get_team_rate_limits(
+    team_id: UUID,
+    user_id: CurrentUserIdDep,
+    supabase: DBDep,
+) -> TeamRateLimitsOut:
+    """Cycle 7 T-702: return the team's effective rate-limit policy.
+
+    Returns the team's overrides if present, else the system
+    defaults (5 / 5 / 20). Any team member can read; the response
+    is the same regardless of role.
+    """
+    _require_member(supabase, user_id=UUID(user_id), team_id=team_id)
+    eff = get_effective_rate_limits(supabase, team_id=str(team_id))
+    return TeamRateLimitsOut.model_validate(eff)
+
+
+@router.patch(
+    "/{team_id}/rate_limits",
+    response_model=TeamRateLimitsOut,
+)
+def patch_team_rate_limits(
+    team_id: UUID,
+    payload: TeamRateLimitsPatchIn,
+    user_id: CurrentUserIdDep,
+    supabase: DBDep,
+) -> TeamRateLimitsOut:
+    """Cycle 7 T-702: update the team's rate-limit overrides.
+
+    Owner only. All fields optional; at least one required (Pydantic
+    rejects empty payloads via model_validator). Each value must
+    be ≥ 1 (enforced by Field(ge=1) on the model).
+    """
+    role = user_role_in_team(supabase, user_id=UUID(user_id), team_id=team_id)
+    if role != "owner":
+        raise HTTPException(
+            status_code=403,
+            detail="only owners can update rate-limit overrides",
+        )
+
+    if (
+        payload.login_per_15min is None
+        and payload.signup_per_hour is None
+        and payload.invite_per_hour is None
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="at least one of login_per_15min, signup_per_hour, "
+            "invite_per_hour must be provided",
+        )
+
+    set_team_rate_limits(
+        supabase,
+        team_id=str(team_id),
+        login_per_15min=payload.login_per_15min,
+        signup_per_hour=payload.signup_per_hour,
+        invite_per_hour=payload.invite_per_hour,
+    )
+    # T-702: invalidate the cached limiter so the new override takes
+    # effect immediately on the next request.
+    invalidate_team_limiter(str(team_id))
+    eff = get_effective_rate_limits(supabase, team_id=str(team_id))
+    return TeamRateLimitsOut.model_validate(eff)

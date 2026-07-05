@@ -1,48 +1,41 @@
-# Plan: AIDLC Cycle 6 — Rate Limiting, Secret Rotation, Front-End Headers
+# Plan: AIDLC Cycle 7 — Operational Security Polish
 
 > **Status:** implementing (pending approval)
 > **Date:** 2026-07-04
-> **Branch:** `feat/rate-limiting`
-> **Source brief:** `.aidlc/spec.md` (cycle 5 out-of-scope items:
-> rate limiting + secret rotation tooling + front-end CSP/HSTS)
-> **Spec acceptance criteria:** 21 ACs across 4 groups
+> **Branch:** `feat/cycle-7-operational-polish`
+> **Source brief:** `.aidlc/spec.md` (cycle-6 review P2 warnings +
+> cycle-6/cycle-5 "Out of Scope" → cycle-7 items)
+> **Spec acceptance criteria:** 17 ACs across 3 groups + AC-DOC-01 +
+> 4 AC-REG
 > **Spec open questions:** 5 (all recommendations logged in spec)
-> **Cycle-5 carry-over:** T-505 (docs/security.md) folded into T-606
 
 ---
 
 ## Why this cycle
 
-Cycle 4 (billing) and cycle 5 (security hardening) closed the
-biggest footguns: insecure defaults silently shipped to production,
-no audit trail for security events, RLS write-path gaps. What's
-left are **operational** security gaps that block true
-prod-readiness:
+Cycles 5 + 6 closed the big security footguns: insecure defaults
+silently shipped to production, no audit trail, brute-forceable
+login, no secret-rotation tooling, front-end missing security
+headers. Cycle 7 polishes what's left:
 
-1. **Login is brute-forceable.** Cycle 5 even added an audit
-   log so we'd *see* the brute-force attempts, but a real
-   mitigation is to *stop* them. The `# TODO(security)` comment
-   in `routers/auth.py:71-72` is the smell.
-2. **JWT secret rotation isn't possible without logging every user
-   out.** Cycle 5 made the validator strict (≥32 bytes, not the
-   default), but on rotation day there's no good way to deploy
-   a new secret — operators either accept the downtime or skip
-   rotation entirely.
-3. **Front-end ships without security headers.** Next.js's default
-   config has no CSP, no HSTS, no X-Frame-Options. A deployed
-   instance is missing the baseline headers every modern browser
-   expects.
+1. **Multi-pod deploys break cycle-6's rate limiter.** The
+   `InMemoryRateLimiter` only works in single-process deploys.
+   A 2-pod Railway deploy means an attacker brute-forcing
+   against pod A gets 5 attempts per IP; if they rotate to pod B
+   they get 5 more. Without distributed state, the limit is
+   useless at the production scale we want to deploy at.
+2. **Per-team rate limits are a product gap.** Every team shares
+   the same 5/15min login cap. A team admin can't tune their
+   team's security posture (stricter for finance, looser for
+   marketing).
+3. **CSP `'unsafe-inline'` is documented as the one compromise.**
+   We collect the violation reports today so cycle-8 can safely
+   tighten to nonce-based CSP. Reporting is the missing half.
 
 Without this cycle, the product cannot:
-- Defend against credential stuffing on /api/auth/login
-- Rotate JWT_SECRET on a regular schedule (PCI-DSS / SOC2 controls)
-- Pass an enterprise security review (no CSP/HSTS = automatic fail)
-- Ship audit-driven alerting (rate-limit-exceeded events are
-  needed to drive ops dashboards)
-
-This cycle closes all three. Rate limiting is the foundation;
-secret rotation is the ops tooling; front-end headers are the
-last-mile hardening; docs are the operator-facing runbook.
+- Deploy to multi-pod Railway / Fly / Render
+- Let enterprise customers tune their rate limits
+- Surface CSP violations in ops dashboards
 
 ---
 
@@ -51,483 +44,420 @@ last-mile hardening; docs are the operator-facing runbook.
 When this cycle ships, an operator can:
 
 ```bash
-# 1. Login is brute-force-protected
-for i in {1..20}; do
-    curl -X POST /api/auth/login \
-        -d '{"email":"x@y.com","password":"wrong"}'
-done
-# → first 5 attempts return 401 (bad creds)
-# → 6th-20th return 429 with Retry-After: <seconds>
-# → security_events captures each rejection
+# 1. Multi-pod deploy: Redis-backed limiter is consistent across pods
+USE_MOCKS=false \
+REDIS_URL=redis://... \
+RATE_LIMIT_BACKEND=redis \
+  uvicorn app.main:app --workers 4
+# → all 4 workers share rate-limit state via Redis. Brute-force on
+#   pod 1 is rate-limited on pod 2 (no per-pod whitelist bypass).
 
-# 2. JWT secret rotation works without logging users out
-#    (deploy with both secrets for the rollover window)
-JWT_SECRET="$(openssl rand -base64 48)" \
-JWT_SECRET_PREVIOUS="$(cat .jwt_secret.old)" \
-    uvicorn app.main:app
-# → tokens issued with either secret verify successfully
+# 2. Team admin sets per-team rate limits
+curl -X PATCH /api/teams/$TEAM_ID/rate_limits \
+    -H "Authorization: Bearer $OWNER_TOK" \
+    -d '{"login_per_15min": 3, "signup_per_hour": 2}'
+# → team's stricter limit takes effect immediately.
 
-# 3. Front-end serves baseline security headers
-curl -I https://app.example.com/
-# → Content-Security-Policy: default-src 'self'; ...
-# → Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
-# → X-Content-Type-Options: nosniff
-# → X-Frame-Options: DENY
-# → Referrer-Policy: strict-origin-when-cross-origin
+# 3. CSP violations are reported
+# Browser auto-POSTs to /api/csp-report when the CSP blocks a script.
+# → lands in security_events with action='csp.violation'. Ops
+#   dashboard alerts on new violation types.
 ```
 
-…with **zero changes to existing router business logic for
-un-rate-limited endpoints** (only login/signup/invitations
-get the rate-limit middleware; everything else passes through
-untouched).
+…with **zero changes to existing router business logic** (the
+rate-limiter swap is a factory change; per-team limits override
+the default policy map; CSP reporting is a new endpoint + a CSP
+directive).
 
 ---
 
 ## Non-goals (still out of scope after this cycle)
 
-- **MFA / 2FA / WebAuthn** — cycle 7+ (requires user-profile
-  schema + UI changes)
-- **Distributed rate limiting (Redis adapter real impl)** —
-  cycle 7 (Redis is a new dep; cycle 6 ships the Protocol +
-  InMemory implementation + a Redis stub for cycle 7 to fill in)
-- **Per-team rate-limit thresholds** — cycle 7 (requires
-  migration + RLS update)
+- **MFA / 2FA / WebAuthn** — cycle 8 (biggest product gap; cycle-5
+  spec explicitly deferred)
+- **One-shot JWT secret rotation tool** — cycle 8 (the manual
+  4-step playbook in `docs/security.md` works)
+- **GDPR data export / right-to-delete** — cycle 8+
 - **OAuth provider integration** — out of scope
-- **Coupons / annual billing** — feature work, not security
-- **GDPR data export / right-to-delete** — cycle 8
-- **Penetration testing** — separate engagement
+- **CSP nonce-based upgrade** — cycle 8+ (needs the violation data
+  cycle-7 collects)
 
 ---
 
 ## Strategy
 
-6 vertical slices. T-601 (rate limiter infra) is the foundation —
-the audit log hook + the auth/teams router integration both
-depend on it. T-602..T-604 are independent integrations of the
-limiter into specific endpoints. T-605 (front-end headers) is
-isolated to the web/ tree, can run in parallel with T-602..T-604.
-T-606 (docs + verify) runs last.
+4 vertical slices. T-701 (Redis limiter) is the foundation —
+both T-702 (per-team thresholds) and T-703 (CSP reporting's
+rate-limit hook) depend on it. T-704 runs last.
 
 ```dot
-digraph cycle6 {
-    T-601 [label="T-601: RateLimiter infra"];
-    T-602 [label="T-602: Auth rate-limit (login + signup)"];
-    T-603 [label="T-603: Invitation rate-limit"];
-    T-604 [label="T-604: Secret rotation helper + audit hooks"];
-    T-605 [label="T-605: Front-end security headers"];
-    T-606 [label="T-606: docs/security.md + final verify"];
+digraph cycle7 {
+    T-701 [label="T-701: Redis rate limiter (real impl)"];
+    T-702 [label="T-702: Per-team rate-limit thresholds"];
+    T-703 [label="T-703: CSP violation reporting"];
+    T-704 [label="T-704: docs/security.md + final verify"];
 
-    T-601 -> T-602;
-    T-601 -> T-603;
-    T-601 -> T-604;
-    T-602 -> T-604;
-    T-604 -> T-606;
-    T-603 -> T-606;
-    T-605 -> T-606;
+    T-701 -> T-702;
+    T-701 -> T-703;
+    T-702 -> T-704;
+    T-703 -> T-704;
 }
 ```
 
-**Parallelism:** T-601 must run first (foundation). After that,
-T-602, T-603, T-604 can run concurrently (different router
-sections, different helpers). T-605 is fully isolated in the
-web/ tree and can run in parallel with T-602..T-604. T-606 runs
-last.
+**Parallelism:** T-701 must run first. After that, T-702 and
+T-703 can run concurrently (different files, different routers).
+T-704 runs last.
 
 ---
 
 ## Tasks
 
-### T-601: RateLimiter infra (Protocol + InMemory + Redis stub)
+### T-701: Redis-backed rate limiter (real impl)
 
 **Files:**
-- `backend/app/rate_limit.py` (new — `RateLimiter` Protocol,
-  `RateLimitPolicy` dataclass, `RateLimitResult` dataclass,
-  `InMemoryRateLimiter` (thread-safe, sliding window),
-  `RedisRateLimiter` stub class with `NotImplementedError` body)
-- `backend/app/config.py` (modify — add `rate_limit_login_per_15min: int`,
-  `rate_limit_signup_per_hour: int`, `rate_limit_invite_per_hour: int`)
-- `backend/app/deps.py` (modify — add `RateLimiterDep` provider that
-  returns the cached singleton from `_factory`)
-- `backend/app/rate_limit_factory.py` (new — `get_rate_limiter()`
-  with `@lru_cache` + `reset_cache()` for tests)
-- `backend/tests/test_rate_limit.py` (new — 8 unit tests)
+- `backend/app/rate_limit.py` (modify — small: add an injectable
+  `now()` for tests; cycle-6 already has the thread-safe impl)
+- `backend/app/redis_rate_limiter.py` (new — the real impl
+  using `redis.Redis` client + sorted sets)
+- `backend/app/rate_limit_factory.py` (modify — env-driven
+  `rate_limit_backend: "memory"|"redis"` selects the impl)
+- `backend/app/config.py` (modify — add `rate_limit_backend: str = "memory"`,
+  `redis_url: str = ""`)
+- `backend/app/deps.py` (modify — `RateLimiterDep` reads `rate_limit_backend`
+  to decide which factory to call; or, simpler: factory already does it)
+- `backend/requirements.txt` (modify — add `redis>=5.0.0`)
+- `backend/requirements-dev.txt` (modify — add `fakeredis>=2.20.0`)
+- `backend/tests/test_redis_rate_limit.py` (new — 8 tests using fakeredis)
 
 **Description:**
-The rate-limiter Protocol is the abstraction layer; the InMemory
-implementation is what runs in dev/test/small-prod. The Redis
-stub is the contract for the cycle-7 distributed impl.
+The cycle-6 `RedisRateLimiter` stub raises `NotImplementedError`.
+Cycle 7 fills it in with a real sorted-set-backed sliding window:
 
-Sliding-window algorithm: per `(key, action)` pair, keep a deque
-of timestamps. On each `allow()` call, prune entries older than
-`window_seconds` and check if `len(deque) >= limit`. If yes,
-return `RateLimitResult(allowed=False, retry_after=...)`. If no,
-append the current timestamp and return `allowed=True`.
+```
+For each (key, action):
+  ZADD rl:{action}:{key} <timestamp>:<unique_id> <timestamp>
+  ZREMRANGEBYSCORE rl:{action}:{key} 0 <now - window_seconds>
+  ZCARD rl:{action}:{key}
+  EXPIRE rl:{action}:{key} <window_seconds + buffer>
+If ZCARD >= limit → reject.
+```
 
-Thread safety: `threading.RLock` around the deque mutation.
-Single-process correctness is enough for cycle 6 (the stub
-`RedisRateLimiter` will provide multi-process correctness in
-cycle 7).
+The keyspace prefix `rl:` keeps rate-limit state separate from
+the rest of the app's Redis usage. `fakeredis` in tests gives
+us a hermetic test suite (no real Redis required).
 
-Fail-open contract: if the limiter raises internally (e.g.,
-the deque is corrupt, or a future Redis call times out), it
-MUST return `allowed=True` so a broken limiter never blocks
-legitimate traffic. The error is logged to stderr.
+**Fail-open contract:** if `redis.Redis` raises (connection
+timeout, auth failure, OOM), the limiter catches + logs
+`rate_limit redis unavailable` + returns `allowed=True`. Same
+behavior as `InMemoryRateLimiter` on internal failure.
+
+The factory picks based on `Settings.rate_limit_backend`:
+- `"memory"` (default) → `InMemoryRateLimiter`
+- `"redis"` → `RedisRateLimiter` reading `Settings.redis_url`
 
 **Acceptance criteria (spec references):**
-- [x] AC-RL-05: `RateLimiter` Protocol + `InMemoryRateLimiter` shipped
-- [x] AC-RL-06: `RedisRateLimiter` stub class exists, passes
+- [x] AC-DRL-01: `RedisRateLimiter` ships, passes
       `isinstance(r, RateLimiter)`
-- [x] 13 tests pass (8 unit + 2 Protocol/Redis-stub + 2 factory +
-      1 thread-safety smoke)
+- [x] AC-DRL-02: `Settings.rate_limit_backend: str = "memory"` default
+- [x] AC-DRL-03: factory builds `RedisRateLimiter` when
+      `rate_limit_backend=redis`
+- [x] AC-DRL-04: uses sorted sets + EXPIRE
+- [x] AC-DRL-05: fails open on Redis error
+- [x] AC-DRL-06: 9 tests pass via fakeredis
 
 **Test approach:**
-- Unit tests in `tests/test_rate_limit.py`, each isolated
-  via `reset_cache()` in a fixture
-- Mock-time: use `time.monotonic()` patching to advance the clock
-  past the window
-- Thread-safety smoke: 10 threads × 100 calls each against a limit
-  of 50 — assert exactly 50 allowed (no over-count, no race)
+- `fakeredis.FakeRedis()` for in-process Redis simulation
+- 9 tests covering: isinstance + allow-under-limit + deny-over-
+  limit + per-key isolation + window expiry + action-policy
+  independence + fail-open on Redis error + EXPIRE TTL + unknown-
+  action defensive default
 
 **Estimated effort:** M
 
-**Done:** T-601 implementation committed (383386a).
-**Notes:** Sliding-window algorithm using `collections.deque` +
-`threading.RLock`. Fail-open contract: any internal exception in
-`allow()` is caught + logged + returns `allowed=True` so a broken
-limiter never blocks traffic. Redis stub is a one-class stub for
-cycle 7 to fill in without touching call sites.
+**Done:** T-701 implementation committed (3a98dfe).
+**Notes:** Lazy-import of redis-py so dev/laptop setups without
+Redis don't need the dep installed. Keyspace prefix 'rl:' keeps
+state separate. EXPIRE = window + 60s buffer for clock-skew slack.
+377 pass total.
 
 ---
 
-### T-602: Auth rate-limit (login + signup)
+### T-702: Per-team rate-limit thresholds
 
 **Files:**
-- `backend/app/routers/auth.py` (modify — wire `RateLimiterDep`
-  into login + signup; on 429, write audit row via
-  `record_rate_limited`)
-- `backend/app/audit_log.py` (modify — add `ACTION_RATE_LIMITED_AUTH`
-  constant + `record_rate_limited_auth(adapter, *, ip, action, limit)`)
-- `backend/tests/test_audit_log.py` (modify — 1 new test verifying
-  rate-limit audit row written)
-- `backend/tests/test_auth.py` (modify — 2 new tests: 6th login
-  returns 429, 6th signup returns 429)
-
-**Description:**
-The brute-force attack vector. Two endpoints, two policies:
-
-- `/api/auth/login`: 5 attempts / 15 minutes / IP
-- `/api/auth/signup`: 5 attempts / hour / IP (anti-enumeration —
-  prevents scripted probing for "is email X already registered?")
-
-Implementation: each endpoint reads `Request.client.host`,
-composes `key=f"{ip}"`, calls `rate_limiter.allow(key=key,
-action='auth.login' | 'auth.signup')`. On `allowed=False`,
-return `429 Too Many Requests` with `Retry-After: <seconds>` header
-and write an audit row.
-
-The audit row captures the limit + the IP so an ops dashboard
-can detect "IP X hit the rate limit 100 times today" patterns.
-
-**Acceptance criteria (spec references):**
-- [x] AC-RL-01: 6th login in 15 min from same IP returns 429
-      with Retry-After
-- [x] AC-RL-02: 6th signup in 1 hour from same IP returns 429
-- [x] AC-RL-04 (auth subset): rate-limit on login/signup writes
-      audit row `action='auth.rate_limited'`
-- [x] 3 new tests pass
-
-**Test approach:**
-- Integration: drive `TestClient` with 6 login attempts from the
-  same IP (TestClient uses `testclient` as the default host), assert
-  the 6th returns 429 with `Retry-After` header
-- Audit integration: query `security_events` after the 6th attempt,
-  assert a row with `action='auth.rate_limited', success=false,
-  metadata={'action': 'auth.login', 'limit': 5}`
-
-**Estimated effort:** M
-
-**Done:** T-602 implementation committed (8e5eb53).
-**Notes:** Brought cycle 5 forward via merge commit. Added autouse
-fixture `_reset_rate_limiter_between_tests` in conftest.py so
-each test starts with fresh rate-limit state (the shared
-singleton otherwise leaks state across tests). 359 pass total.
-
----
-
-### T-603: Invitation rate-limit
-
-**Files:**
-- `backend/app/routers/teams.py` (modify — wire `RateLimiterDep`
-  into `POST /api/teams/{id}/invitations`; key includes team_id +
-  owner_id, not IP, so a single owner across many IPs still hits
-  the limit)
-- `backend/app/audit_log.py` (modify — add `record_rate_limited_team`)
-- `backend/tests/test_audit_log.py` (modify — 1 new test)
-- `backend/tests/test_invitations.py` (modify — 1 new test: 21st
-  invitation returns 429)
-
-**Description:**
-Spam defense for invitations. Per-owner limit (not per-IP, since
-the owner is authenticated and might be on a moving IP):
-
-- `POST /api/teams/{id}/invitations`: 20 attempts / hour / owner
-
-Key composition: `f"team:{team_id}:owner:{owner_id}"`. This way a
-single owner across multiple devices / VPNs still hits the limit,
-but two different teams' owners don't interfere.
-
-The audit row uses `action='team.invite_rate_limited'` (a new
-constant) and includes `metadata={'team_id': ..., 'owner_id': ...}`
-for ops triage.
-
-**Acceptance criteria (spec references):**
-- [x] AC-RL-03: 21st invitation in 1 hour from same owner returns 429
-- [x] AC-RL-04 (team subset): rate-limit on invitations writes audit
-      row `action='team.invite_rate_limited'`
-- [x] 2 new tests pass
-
-**Test approach:**
-- Integration: drive 21 invitations from the same owner; assert
-  the 21st returns 429 with Retry-After
-- Audit: query `security_events`, assert the new action constant
-  appears with the right metadata
-
-**Estimated effort:** S
-
-**Done:** T-603 implementation committed (7d28067).
-**Notes:** Key composition is `team:{team_id}:owner:{user_id}` (per-
-owner, not per-IP, since the owner is authenticated and may move
-between IPs). `record_rate_limited()` extended with optional
-`event_action` override so each call site can use the right
-SIEM-filterable action string. 361 pass total.
-
----
-
-### T-604: Secret rotation helper + audit hook for rate-limit summary
-
-**Files:**
-- `backend/app/secret_rotation.py` (new — `decode_token_rotating()`
-  helper that tries current + previous secret)
-- `backend/app/services/auth.py` (modify — `decode_token()` calls
-  `decode_token_rotating()` so every endpoint that verifies a JWT
-  gets rotation for free)
+- `backend/migrations/006_team_rate_limits.sql` (new — table + RLS)
+- `backend/app/adapters/supabase/_schema.py` (modify — add
+  `TEAM_RATE_LIMITS` to `DEFAULT_SCHEMA`)
+- `backend/app/domain/team.py` (modify — `TeamRateLimits` BaseModel)
+- `backend/app/services/team_service.py` (modify —
+  `get_effective_rate_limits(adapter, team_id, defaults)` returns
+  override-merged-with-defaults)
+- `backend/app/config.py` (modify — add `team_rate_limit_min: int = 1`
+  for the validator)
 - `backend/app/security_validation.py` (modify — add
-  `validate_jwt_secret_previous()` to the validator chain)
-- `backend/app/config.py` (modify — add `jwt_secret_previous: str = ""`)
-- `backend/app/audit_log.py` (modify — extend audit-log action
-  namespace with `ACTION_LOGIN_RATE_LIMITED`, `ACTION_SIGNUP_RATE_LIMITED`,
-  `ACTION_INVITE_RATE_LIMITED` so the rate-limit hooks from T-602 +
-  T-603 use the same constants)
-- `backend/tests/test_secret_rotation.py` (new — 4 tests)
+  `validate_team_rate_limit_overrides()` that runs on team PATCH)
+- `backend/app/routers/teams.py` (modify — GET + PATCH endpoints)
+- `backend/app/rate_limit_factory.py` (modify — `get_rate_limiter(team_id)`
+  returns a limiter that reads per-team overrides from Supabase)
+- `backend/tests/test_team_rate_limits.py` (new — 8 tests)
 
 **Description:**
-JWT secret rotation without logging every user out. The helper
-tries `jwt_secret` first, then `jwt_secret_previous` if set.
-Both are valid during the rollover window (operator-controlled;
-convention = 24h).
+Team admins can override the system-default rate-limit policies.
+Schema is a separate table mirroring the cycle-4 `billing_customers`
+pattern: `team_rate_limits(team_id PRIMARY KEY, login_per_15min,
+signup_per_hour, invite_per_hour, updated_at)`. RLS: owner of
+the team can SELECT + UPDATE; everyone else gets 0 rows.
 
-Why this is needed: in cycle 5, `validate_security()` enforces
-a strong `jwt_secret`. But once deployed, rotating it means
-every token signed with the old secret stops verifying. The
-operator's only option today is to wait until all old tokens
-expire (`jwt_ttl_seconds = 86400` = 24h), which means a 24h
-window where users get logged out if they hit it during the
-rotation moment. With `jwt_secret_previous`, the rollover is
-zero-downtime: deploy with both, monitor for failures, drop
-the previous after the window closes.
+The rate-limiter factory gets a new `get_rate_limiter_for_team(team_id)`
+that:
+1. Reads the team's overrides from Supabase (or returns defaults
+   if no row).
+2. Builds a `RateLimiter` whose policies are the merged
+   per-team values.
 
-The validator enforces the previous secret's quality too: if set,
-must be ≥ 32 bytes. This catches the "I accidentally copy-pasted
-a 6-character stub" bug before it ships.
+The team router exposes:
+- `GET /api/teams/{id}/rate_limits` → effective limits
+  (override OR default) — readable by anyone in the team
+- `PATCH /api/teams/{id}/rate_limits` → update overrides —
+  owner only
+
+The PATCH payload is `{login_per_15min?, signup_per_hour?, invite_per_hour?}`
+(all optional, all ≥ 1). Validator rejects 0 / negative.
+
+**Cycle-6 wire-up:** the existing `RateLimiterDep` resolves the
+default (system-wide) limiter. New `TeamRateLimiterDep` resolves
+the per-team limiter — used by the per-team rate-limit endpoints
+themselves. The cycle-6 router-level rate-limit checks
+(`auth.login` etc.) still use the system-wide limiter for v1;
+the per-team override applies to NEW endpoints that opt into
+`TeamRateLimiterDep`. Cycle 8+ can extend the existing endpoints
+to use `TeamRateLimiterDep` instead.
+
+Wait — this is wrong. The spec says per-team limits apply to the
+login / signup / invite endpoints. Let me re-read.
+
+From the spec:
+> AC-TRL-04: When a team has overrides, the rate limiter uses
+> the team's limits instead of the system defaults.
+
+So the login endpoint SHOULD use the per-team limiter when the
+caller is authenticated and acting on a team. But login is
+anonymous (no team context yet — we don't know who you are until
+you've authenticated). So per-team limits for login make sense
+once the user is authenticated.
+
+Re-reading the spec more carefully:
+> **AC-TRL-04** — When a team has overrides, the rate limiter
+> uses the team's limits instead of the system defaults.
+
+I'll interpret this as: per-team overrides apply to **team-scoped**
+endpoints (team invitations, accept-invitation, etc.). For
+auth endpoints (login, signup), we use the system-wide defaults
+because we don't know which team the request belongs to until
+after auth. Document this limitation in the endpoint's docstring
++ the docs/security.md addendum.
+
+So:
+- `TeamRateLimiterDep` is used by `/api/teams/{id}/invitations`
+  + `/api/teams/invitations/{token}/accept` + future team-scoped
+  endpoints
+- `RateLimiterDep` continues to be used by `/api/auth/login`
+  + `/api/auth/signup` (system-wide)
 
 **Acceptance criteria (spec references):**
-- [x] AC-SR-01: `decode_token_rotating()` accepts current + previous
-- [x] AC-SR-02: tokens signed with neither raise `jwt.InvalidTokenError`
-- [x] AC-SR-03: `Settings.jwt_secret_previous: str = ""` defaults empty
-- [x] AC-SR-04: `auth_service.decode_token()` calls the rotating helper
-- [x] AC-SR-05: `validate_security()` enforces ≥ 32 bytes on
-      `jwt_secret_previous` if set
-- [x] 7 new tests pass (4 rotation + 3 validator)
+- [x] AC-TRL-01: `team_rate_limits` table + RLS
+- [x] AC-TRL-02: `GET /api/teams/{id}/rate_limits` returns effective limits
+- [x] AC-TRL-03: `PATCH /api/teams/{id}/rate_limits` updates overrides
+      (owner only)
+- [x] AC-TRL-04: per-team overrides apply to team-scoped endpoints
+      (invite_member migrated to use _get_or_build_team_limiter)
+- [x] AC-TRL-05: validator rejects 0 / negative values
+- [x] AC-TRL-06: 9 tests pass (CRUD + enforcement + admin-only +
+      defaults-fallback + service-layer merge)
 
 **Test approach:**
-- Unit tests in `test_secret_rotation.py`:
-  1. token signed with current → verify OK
-  2. token signed with previous → verify OK
-  3. token signed with neither → `InvalidTokenError`
-  4. malformed token → `InvalidTokenError`
-  5. validator rejects short previous in prod
-  6. validator accepts long previous in prod
-  7. validator allows empty previous in prod
+- Schema presence (table + columns)
+- GET returns system defaults when no override
+- PATCH updates overrides + returns new values
+- PATCH as non-owner returns 403
+- PATCH validator rejects 0 / negative (422)
+- Enforcement: team with override=3 hits 429 after 3rd invite
+- Defaults-fallback at service layer
 
 **Estimated effort:** M
 
-**Done:** T-604 implementation committed (bdd3a22).
-**Notes:** `decode_token_rotating()` distinguishes
-`InvalidSignatureError` (wrong secret — try next candidate)
-from other `InvalidTokenError` (expired / malformed / missing
-claim — fail fast, don't waste time trying other secrets).
-368 pass total.
+**Done:** T-702 implementation committed (ed0969c).
+**Notes:** Module-level `_team_limiters` dict caches per-team
+limiters so successive requests share sliding-window state.
+PATCH endpoint invalidates the cache on update. invite_member
+migrated from RateLimiterDep to _get_or_build_team_limiter()
+for per-team enforcement. 386 pass total.
 
 ---
 
-### T-605: Front-end security headers
+### T-703: CSP violation reporting
 
 **Files:**
-- `web/next.config.mjs` (modify — add `headers()` function with
-  CSP / HSTS / X-Content-Type-Options / X-Frame-Options /
-  Referrer-Policy on `source: '/(.*)'`)
-- `web/__tests__/headers.test.ts` (new — 3 vitest tests asserting
-  the headers on a rendered page)
-- `web/vitest.setup.ts` (modify — register the headers test)
-- `web/package.json` (modify — add `vitest` + `happy-dom` if
-  not already in; check first)
+- `backend/app/audit_log.py` (modify — add `ACTION_CSP_VIOLATION`
+  constant)
+- `backend/app/routers/csp_report.py` (new — `POST /api/csp-report`)
+- `backend/app/main.py` (modify — register the new router)
+- `backend/tests/test_csp_report.py` (new — 4 tests)
+- `web/lib/csp_report.ts` (new — client-side helper that browsers
+  use to forward violation reports)
+- `web/__tests__/csp_report.test.ts` (new — 3 tests)
+- `web/next.config.mjs` (modify — add `report-uri /api/csp-report`
+  to the CSP header in production)
 
 **Description:**
-Next.js serves the dashboard without security headers today. Add
-the baseline set: CSP (default-src 'self' with the narrow
-exceptions Next.js needs for inline bootstrap), HSTS (2-year
-max-age, includeSubDomains, preload), X-Content-Type-Options
-(nosniff), X-Frame-Options (DENY), Referrer-Policy
-(strict-origin-when-cross-origin).
+Browsers that block a script per the CSP can be configured to
+report the violation. The standard format is
+`Content-Type: application/csp-report` with a JSON body:
 
-The CSP includes `'unsafe-inline'` for scripts because Next.js's
-bootstrap script is inline. Document this in a code comment so
-the next maintainer doesn't think it's an oversight.
+```json
+{ "csp-report": {
+    "document-uri": "https://app.example.com/dashboard",
+    "violated-directive": "script-src 'self'",
+    "blocked-uri": "https://evil.example.com/x.js",
+    "original-policy": "default-src 'self'; ..."
+}}
+```
 
-Dev mode uses a relaxed CSP (allows `'unsafe-eval'` for HMR).
-Production uses the strict version. Gated by `NODE_ENV`.
+The endpoint:
+1. Accepts the request body (browsers can't send auth headers,
+   so the endpoint is unauthenticated).
+2. Parses the `csp-report` JSON.
+3. Extracts `violated-directive` + `blocked-uri`.
+4. Writes one row to `security_events` with
+   `action='csp.violation', metadata={violated_directive,
+   blocked_uri}`.
+5. Returns `204 No Content`.
+
+The web side:
+1. Add `report-uri /api/csp-report` to the production CSP.
+2. Provide a client-side helper that handles the standard
+   `SecurityPolicyViolationEvent` browser API and forwards
+   to `/api/csp-report`. (Cycle 7's tests cover the helper;
+   the actual `<meta>` integration is left to cycle 8 when
+   we go nonce-based.)
 
 **Acceptance criteria (spec references):**
-- [x] AC-WEB-01: CSP header present on rendered page
-- [x] AC-WEB-02: HSTS header present
-- [x] AC-WEB-03: X-Content-Type-Options, X-Frame-Options,
-      Referrer-Policy present
-- [x] AC-WEB-04: headers apply to all routes (`/(.*)` matcher)
-- [x] AC-WEB-05: 4 vitest tests pass (1 extra for matcher coverage)
+- [x] AC-CSP-01: accepts `application/csp-report` content-type
+- [x] AC-CSP-02: writes audit row with `action='csp.violation'`,
+      `metadata.violated_directive`, `metadata.blocked_uri`
+- [x] AC-CSP-03: returns 204 on malformed bodies (no raise)
+- [x] AC-CSP-04: web CSP adds `report-uri /api/csp-report` in prod
+- [x] AC-CSP-05: 5 backend tests + 4 frontend tests pass (the
+      plan said 4+3; we got 5+4 because the AC-CSP-04 test was
+      added on top)
 
 **Test approach:**
-- Vitest tests import `nextConfig` directly and call the
-  `headers()` function — no `next dev` needed. Faster + tests
-  the contract, not the server.
+- Backend: parse standard report, parse minimal report (defaults
+  to "unknown"), parse malformed body (returns 204), parse
+  empty body (returns 204), constant contract
+- Frontend: helper builds the right body shape, fetch errors
+  swallowed, non-204 responses swallowed, AC-CSP-04 source check
 
 **Estimated effort:** S
 
-**Done:** T-605 implementation committed (e512fc1).
-**Notes:** CSP allows 'unsafe-inline' for scripts because Next.js's
-bootstrap script is inline. This is the only unsafe directive;
-tighten to nonce-based CSP in cycle 7+ if a CSP-violation
-channel is added. dev allows 'unsafe-eval' for HMR; prod doesn't.
-Stripe Checkout explicitly allowed in frame-src + connect-src.
+**Done:** T-703 implementation committed (da48986).
+**Notes:** Best-effort contract: fetch errors + DB errors + parse
+errors all return 204 silently. The browser should never see a
+CSP report failure escalate into a console error or page-level
+alert. `keepalive: true` on the fetch so the report survives
+page unloads. 391 backend + 44 web tests.
 
 ---
 
-### T-606: docs/security.md + final verification (cycle-5 T-505 folded in)
+### T-704: docs/security.md cycle-7 addendum + final verify
 
 **Files:**
-- `docs/security.md` (new — comprehensive security runbook)
-- `backend/.env.example` (modify — add `JWT_SECRET_PREVIOUS`
-  example + comment explaining the rollover pattern)
-- (no test changes — covered by T-601..T-605)
+- `docs/security.md` (modify — add a "Cycle 7 Addendum" section
+  at the bottom covering: Redis ops, per-team admin guide,
+  CSP reporting ops)
+- (no test changes — covered by T-701..T-703)
 
 **Description:**
-The operator-facing runbook. Folds in cycle-5 T-505 (which was
-just "write docs/security.md"). Now includes:
+A short addendum (cycle-7-specific ops) that lives at the bottom
+of `docs/security.md`. Covers:
 
-1. **Secret rotation playbook** — 4 steps:
-   a) Generate new secret (`openssl rand -base64 48`)
-   b) Deploy with `JWT_SECRET=<new>` + `JWT_SECRET_PREVIOUS=<old>`
-   c) Monitor `security_events` for `auth.login.failure` spikes
-   d) After the rollover window (24h convention), drop
-      `JWT_SECRET_PREVIOUS`
-2. **Audit review query cookbook** — top-10 ops queries:
-   - failed logins by IP (last 24h)
-   - rate-limit-exceeded events (today)
-   - signup velocity per IP (anti-sybil)
-   - permission denials (none expected; alert if > 0)
-   - JWT decode failures from wrong secret (rotation signal)
-   - … (5 more)
-3. **Incident response checklist** — when an alert fires:
-   triage ladder, escalation matrix, rollback steps
-4. **`.env` reference** — every secret annotated with prod
-   requirement (cycle-5 validators + the new `jwt_secret_previous`)
-5. **Front-end headers explained** — what each header does and
-   why we set it (cycle-6 addition)
+1. **Redis ops** — provisioning the Redis URL on Railway /
+   Fly / Render; monitoring Redis latency; what to do when
+   Redis goes down (the fail-open contract means the rate
+   limiter continues, but the audit row on rate-limit-exceeded
+   is lost — flagged in the audit cookbook).
+2. **Per-team admin guide** — how to PATCH a team's rate limits,
+   what the limits mean, how to roll back to defaults.
+3. **CSP reporting ops** — what a CSP violation looks like in
+   `security_events`, how to interpret `metadata.violated_directive`,
+   when to investigate (new violation type = potential XSS probe).
 
 Final verification:
-- 365+ tests pass (343 baseline + 8 rate-limit + 3 audit-hook +
-  2 auth-integration + 1 invitation + 4 secret-rotation +
-  3 web-headers)
-- Coverage ≥ 90% (preserves the ≥ 80% gate)
+- 388+ tests pass (368 baseline + 8 Redis RL + 8 team limits +
+  4 CSP report + 3 frontend CSP client)
+- Coverage ≥ 90%
 - ruff + ruff-format + mypy strict clean
 - web typecheck + vitest clean
 - CI green
 
 **Acceptance criteria (spec references):**
-- [x] AC-DOC-01: `docs/security.md` covers secret rotation +
-      audit review + incident response + front-end headers
+- [x] AC-DOC-01: docs/security.md adds cycle-7 addendum
 - [x] AC-REG-01..04: all quality gates green
 
 **Test approach:**
-- This task is docs + final verification. No new tests.
-- Verified each runbook query by hand against the mock Supabase
-- Verified the rotation playbook by signing tokens with current +
-  previous secrets and confirming both decode via
-  decode_token_rotating()
+- Docs + final verification only. No new tests.
 
 **Estimated effort:** S
 
-**Done:** T-606 implementation committed (ad81052).
-**Notes:** docs/security.md covers 5 sections (rotation,
-audit cookbook, incident response, .env reference, headers)
-plus a cross-references index. Folds in cycle-5's T-505.
-Backend: 368 pass; web: 40 vitest pass; ruff+mypy+typecheck
-clean.
+**Done:** T-704 implementation committed (98aa1e6).
+**Notes:** docs/security.md grows from 374 to 637 lines. Three
+sub-sections: Redis ops (provisioning, monitoring, fail-open
+recovery), per-team admin guide (override rules, rollback,
+audit gap), CSP reporting ops (what a violation looks like,
+when to investigate, 3 dashboard queries). Section 7 adds
+cycle-7 cross-references. Cycle 7 complete: 4/4 tasks.
 
 ---
 
 ## Dependency graph (text form)
 
 ```
-                    T-601 (rate-limiter infra)
-                       │
-        ┌──────────────┼─────────────────┐
-        ▼              ▼                 ▼
-    T-602 (auth)   T-603 (invites)   T-604 (rotation)
-        │              │                 │
-        └──────────────┴─────────────────┘
-                       │
-                       ▼
-                   T-606 (docs + verify)
-
-T-605 (front-end headers) is fully isolated in web/ and can
-run in parallel with T-602..T-604. Joins T-606 at the end.
+                T-701 (Redis RL)
+                   │
+        ┌──────────┴──────────┐
+        ▼                     ▼
+    T-702 (per-team)      T-703 (CSP report)
+        │                     │
+        └──────────┬──────────┘
+                   ▼
+              T-704 (docs + verify)
 ```
 
 ## Parallelizable work
 
-After T-601 lands, three agents can run in parallel:
-- Agent A → T-602 (auth rate-limit)
-- Agent B → T-603 (invitation rate-limit)
-- Agent C → T-604 (secret rotation)
-- Agent D → T-605 (front-end headers, web tree only)
+After T-701 lands, two agents can run in parallel:
+- Agent A → T-702 (per-team thresholds, backend-only)
+- Agent B → T-703 (CSP reporting, backend + web)
 
-T-606 runs last, after all four land.
+T-704 runs last, after both land.
 
 ## Risk register
 
 | Risk | Mitigation |
 |------|-----------|
-| Rate-limit false-positives block legit users in test | Tests use `reset_cache()` per-test so state doesn't leak |
-| Rate-limiter breaks in production (Redis unreachable, etc.) | Fail-open contract: broken limiter returns `allowed=True` and logs |
-| JWT secret rotation breaks logins for in-flight tokens | `jwt_secret_previous` accepts both; window is operator-controlled |
-| CSP `'unsafe-inline'` weakens XSS defense | Documented in config comment; cycle 7 can switch to nonce-based CSP if needed |
-| Front-end headers block legitimate cross-origin requests (e.g., Stripe Checkout redirect) | CSP's `frame-src` and `connect-src` allow the Stripe domain explicitly |
-| Audit log table fills up too fast with rate-limit events | Index on `(action, created_at DESC)` (cycle-5 already added this partial index) |
+| Redis-py version mismatch with Python 3.11 | Pin `redis>=5.0.0` (latest stable, supports 3.11) |
+| Multi-pod deploys leak secrets via Redis URL | Redis URL is an env var (not in code); same hygiene as Stripe keys |
+| Per-team overrides allow admins to lock themselves out | Cycle-7 validator enforces `rate_limit_login_per_15min >= 1`; admins can always raise it back |
+| `fake-rate-limit-spam` floods /api/csp-report | Endpoints are cheap; add per-IP rate limit (1000/hr) in cycle-8 polish |
+| Per-team overrides + default fallback is slow (extra DB query per request) | Cache per-team overrides in a `lru_cache(maxsize=256)` keyed by team_id; 60s TTL invalidates on PATCH |
+| Audit row write fails (DB outage) for CSP report | `write_event` swallows + logs; CSP report endpoint returns 204 regardless |
 
 ## Out of scope reminders
 
-- Distributed rate limiting (Redis adapter real impl) → cycle 7
-- Per-team rate-limit thresholds → cycle 7
-- MFA / WebAuthn → cycle 7+
-- Coupon / annual billing → cycle 8+ (feature work)
-- GDPR data export → cycle 8
+- MFA / WebAuthn → cycle 8
+- One-shot JWT rotation tool → cycle 8
+- GDPR data export → cycle 8+
+- OAuth → never
+- CSP nonce-based upgrade → cycle 8+ (needs cycle-7 violation data)
+- Cycle-6 P2 warnings (event_action: Literal, autouse redundancy,
+  decode_token rename) → cycle 8 polish

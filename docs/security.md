@@ -372,3 +372,266 @@ rows with `action='csp.violation'`. Cycle-7 work.
 - `backend/tests/test_rate_limit.py` — rate-limiter tests
 - `backend/tests/test_secret_rotation.py` — rotation tests
 - `web/__tests__/headers.test.ts` — front-end header tests
+---
+
+## 6. Cycle 7 addendum
+
+Cycle 7 ships three operational-security features layered on top
+of the cycle-5/6 foundations. This section covers the new ops
+surface.
+
+### 6.1 Redis-backed rate limiter (multi-pod)
+
+Cycle 6's `InMemoryRateLimiter` only works in single-process
+deploys. A 2-pod Railway / Fly / Render deploy means an attacker
+brute-forcing against pod A gets 5 attempts per IP; if they
+rotate to pod B they get 5 more. Cycle 7 ships `RedisRateLimiter`
+with sliding-window state in Redis (sorted sets + ZADD +
+ZREMRANGEBYSCORE + ZCARD + EXPIRE) so the limit is consistent
+cluster-wide.
+
+**Provisioning:**
+
+1. Provision a Redis instance (Upstash, Redis Cloud, Render Key-Value,
+   or self-hosted). Note the `REDIS_URL` (e.g.,
+   `redis://default:<password>@<host>.upstash.io:6379`).
+2. Set `RATE_LIMIT_BACKEND=redis` and `REDIS_URL=...` in your
+   prod env. The factory lazily imports `redis-py`; dev / laptop
+   setups without Redis still work (defaults to `memory`).
+3. Verify the keyspace: the limiter writes keys with prefix `rl:`
+   (e.g., `rl:auth.login:1.2.3.4`). TTL is `window_seconds + 60s`.
+
+**Monitoring:**
+
+```bash
+# Check the keyspace size (number of rate-limit buckets)
+redis-cli -u $REDIS_URL KEYS 'rl:*' | wc -l
+
+# Watch a single IP's bucket fill up
+redis-cli -u $REDIS_URL ZCARD 'rl:auth.login:1.2.3.4'
+
+# Top 10 most-active keys
+redis-cli -u $REDIS_URL --scan --pattern 'rl:*' | xargs -I{} sh -c 'echo "$(redis-cli -u $REDIS_URL ZCARD {}) {}"' | sort -rn | head
+```
+
+**What to do when Redis is down:**
+
+The `RedisRateLimiter` fail-open contract returns `allowed=True`
+on any Redis exception (ConnectionError, TimeoutError, auth
+failure, OOM). The application keeps serving traffic, but
+`logger.error("rate_limit redis unavailable ...")` fires on every
+rate-limit check. Two things to check:
+
+1. **Are users actually being rate-limited?** If `audit_log`
+   shows zero `action='auth.rate_limited'` rows during an outage,
+   the fail-open is working as designed.
+2. **Did the audit row for the (now-missed) rate-limit trip get
+   written?** No — the audit row is written *after* the rate-limit
+   check fails, and the rate-limit check failed-open. So the
+   audit trail is incomplete for the duration of the outage.
+
+Recovery: the rate-limit state is **not** persisted across Redis
+restarts (the sorted set buckets expire on TTL anyway). When
+Redis comes back, every IP gets a fresh quota. Brute-force
+attackers will likely retreat during the outage window because
+they're making no progress, but watch the audit log for a spike
+in successful logins (post-outage they may come back).
+
+### 6.2 Per-team rate-limit thresholds
+
+Team admins can override the system-default rate-limit policies
+via `PATCH /api/teams/{id}/rate_limits`. The endpoint is
+owner-only; any team member can `GET` the current effective
+limits (override OR default).
+
+**Admin guide:**
+
+```bash
+# Get current effective limits (returns override or default)
+curl https://app.example.com/api/teams/$TEAM_ID/rate_limits \
+  -H "Authorization: Bearer $OWNER_TOK"
+# → {"login_per_15min": 5, "signup_per_hour": 5, "invite_per_hour": 20}
+
+# Stricten: enterprise team with stricter login policy
+curl -X PATCH https://app.example.com/api/teams/$TEAM_ID/rate_limits \
+  -H "Authorization: Bearer $OWNER_TOK" \
+  -H "Content-Type: application/json" \
+  -d '{"login_per_15min": 3, "invite_per_hour": 5}'
+
+# Loosen: marketing team with more invites
+curl -X PATCH https://app.example.com/api/teams/$TEAM_ID/rate_limits \
+  -H "Authorization: Bearer $OWNER_TOK" \
+  -H "Content-Type: application/json" \
+  -d '{"invite_per_hour": 50}'
+
+# Reset to defaults: clear the override row (DELETE endpoint
+# coming in cycle 8; for now, set to system defaults via PATCH)
+```
+
+**What the limits mean:**
+
+- **`login_per_15min`**: failed + successful login attempts
+  counted together. So 5 wrong passwords = 5/5 quota; the 6th
+  attempt (right or wrong) returns 429.
+- **`signup_per_hour`**: signup attempts per IP, not per team.
+  Defense against scripted account-creation / enumeration
+  probing.
+- **`invite_per_hour`**: invitation creations per owner (not per
+  IP — the owner is authenticated and may be on a moving IP).
+  Defense against spam.
+
+**Override rules:**
+
+- Each value must be `≥ 1` (enforced by both the API Pydantic
+  validator and the DB `CHECK` constraint). The API returns
+  `422 Unprocessable Entity` for 0 or negative values.
+- Empty `PATCH` payloads return `422` ("at least one of
+  login_per_15min, signup_per_hour, invite_per_hour must be
+  provided").
+- Per-team overrides apply to team-scoped endpoints (e.g.,
+  invitation creation). The `/api/auth/login` and
+  `/api/auth/signup` endpoints continue to use the system-wide
+  defaults because we don't know which team the user belongs to
+  until after they authenticate.
+- Overrides take effect immediately on the next request (the
+  cached `InMemoryRateLimiter` is invalidated on PATCH).
+
+**Rollback to defaults:**
+
+Cycle 7 doesn't have a `DELETE /api/teams/{id}/rate_limits`
+endpoint yet. To roll back:
+
+1. Query the current override row.
+2. PATCH with all three values set to system defaults (5 / 5 / 20)
+   OR set values to known-good limits.
+3. (Cycle 8) Direct DB delete via the admin SDK.
+
+**Auditing:**
+
+Every PATCH writes no audit row (cycle 7 doesn't have a
+`team.rate_limits.changed` action yet — cycle-8 polish). For
+now, rely on git history + change log to track who changed what
+when.
+
+### 6.3 CSP violation reporting
+
+Cycle 6's CSP used `'unsafe-inline'` for scripts because
+Next.js's bootstrap is inline. That's the one compromise. Cycle
+7's CSP violation reporting is the missing half: when the
+browser blocks a script per the CSP, it can POST a violation
+report to `/api/csp-report` and we log it to `security_events`.
+
+**What a CSP violation looks like in `security_events`:**
+
+```json
+{
+  "id": "...",
+  "actor_id": null,
+  "action": "csp.violation",
+  "target_id": null,
+  "ip": "203.0.113.42",
+  "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+  "success": true,
+  "metadata": {
+    "violated_directive": "script-src 'self'",
+    "blocked_uri": "https://evil.example.com/x.js",
+    "document_uri": "https://app.example.com/dashboard"
+  },
+  "created_at": "2026-07-04T..."
+}
+```
+
+**Interpretation:**
+
+- **`action='csp.violation'`** + `success=true` — the report was
+  accepted (the endpoint always returns 204, even for malformed
+  bodies, so "success" here means "received", not "report was
+  valid").
+- **`metadata.violated_directive`** — what the browser was
+  trying to do. `"script-src 'self'"` = browser tried to load a
+  script from a non-self origin. `"style-src 'unsafe-inline'"` =
+  browser blocked an inline style. `"connect-src 'self'"` = browser
+  blocked an XHR/fetch to a non-self origin.
+- **`metadata.blocked_uri`** — what was blocked. This is the
+  smoking gun for XSS attempts: a real attacker's payload URL
+  shows up here.
+- **`metadata.document_uri`** — the page the user was on when
+  the violation happened. Useful for narrowing down a compromised
+  page or a specific embed.
+
+**When to investigate:**
+
+- **New `violated_directive` you've never seen before** —
+  something in your app changed and the CSP didn't catch up.
+  Check the commit log.
+- **`blocked_uri` from a non-trusted origin** — likely a
+  successful XSS probe. The browser is doing its job; you should
+  be alerted.
+- **Spike in CSP violations from a single IP** — could indicate
+  a misbehaving client (e.g., a buggy extension) or a script-kiddie
+  scanning your site.
+- **CSP violations on your own origins** — usually a misconfigured
+  `<script>` tag or inline style. Fix the source.
+
+**Ops dashboard query cookbook** (10-cycle-5 + 4-cycle-7):
+
+```sql
+-- New CSP violation type appeared in the last 24h
+-- (alert: new violation type = potential XSS probe or app change)
+SELECT metadata->>'violated_directive' AS directive,
+       count(*) AS hits
+FROM security_events
+WHERE action = 'csp.violation'
+  AND created_at > now() - interval '24 hours'
+GROUP BY directive
+ORDER BY hits DESC;
+
+-- Top blocked URIs (alert on untrusted origins)
+SELECT metadata->>'blocked_uri' AS blocked_uri,
+       count(*) AS hits
+FROM security_events
+WHERE action = 'csp.violation'
+  AND created_at > now() - interval '24 hours'
+  AND metadata->>'blocked_uri' NOT LIKE '%your-domain.com%'
+GROUP BY blocked_uri
+ORDER BY hits DESC
+LIMIT 20;
+
+-- CSP violations per page (find a buggy page)
+SELECT metadata->>'document_uri' AS page,
+       count(*) AS hits
+FROM security_events
+WHERE action = 'csp.violation'
+  AND created_at > now() - interval '7 days'
+GROUP BY page
+ORDER BY hits DESC
+LIMIT 20;
+```
+
+**Cycle-8 note:** when we go nonce-based CSP (replacing the
+`'unsafe-inline'` compromise), the violation data we're
+collecting in cycle 7 is exactly the data we need to validate
+that the nonce migration is safe. The `report-uri` directive
+will be replaced with a per-violation nonce report, but the
+backend endpoint stays the same.
+
+---
+
+## 7. Cross-references (cycle 7)
+
+- `app/redis_rate_limiter.py` — `RedisRateLimiter` real impl
+- `app/rate_limit_factory.py` — env-driven `RATE_LIMIT_BACKEND`
+  selection
+- `app/routers/teams.py` — per-team rate-limit GET + PATCH +
+  per-team invite cap enforcement (`_get_or_build_team_limiter`)
+- `app/services/team_service.py` — `get_effective_rate_limits` +
+  `set_team_rate_limits`
+- `migrations/006_team_rate_limits.sql` — `team_rate_limits`
+  table + RLS
+- `app/routers/csp_report.py` — `POST /api/csp-report` endpoint
+- `web/lib/csp_report.ts` — client-side `reportCspViolation()`
+  helper
+- `backend/tests/test_redis_rate_limit.py` — Redis limiter tests
+- `backend/tests/test_team_rate_limits.py` — per-team tests
+- `backend/tests/test_csp_report.py` — CSP-report endpoint tests
+- `web/__tests__/csp_report.test.ts` — client-side helper tests

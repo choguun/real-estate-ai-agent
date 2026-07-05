@@ -12,6 +12,13 @@ PyJWT==2.10.1
 httpx==0.28.1
 stripe==15.3.0
 
+# Cycle 7 T-701: distributed rate limiter (optional dep)
+redis>=5.0.0
+
+# Cycle 7 T-701: dev/test dep for in-process Redis simulation.
+# Used by tests/test_redis_rate_limit.py for hermetic testing.
+fakeredis>=2.20.0
+
 # dev / test
 pytest==8.3.4
 pytest-cov==6.0.0
