@@ -3,7 +3,7 @@
 These tests hit the REAL Supabase project + REAL LINE Messaging API +
 REAL Anthropic API. They are **skipped by default** because:
 
-1. CI on PRs/pushes has no credentials
+1. They require real credentials (secrets) not available by default
 2. Local dev should run on mocks (`USE_MOCKS=true`) for speed
 
 Run locally against a dev project:
@@ -20,9 +20,6 @@ export SUPABASE_STORAGE_BUCKET=uploads
 export SUPABASE_STORAGE_PRIVATE=false
 pytest -q tests/test_live_smoke.py
 ```
-
-Or in GitHub Actions: Actions → CI → Run workflow → check
-"Run live smoke tests" (uses secrets from the repo).
 
 **Cleanup:** each test uses a unique ID prefix so reruns don't collide.
 A live smoke run creates real rows in your dev project; clean them up

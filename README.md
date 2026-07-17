@@ -70,15 +70,14 @@ Full architectural diagrams and request lifecycles in
 | AI          | Anthropic Claude 3.5 Sonnet + Google Gemini 2.0 (mocked locally) |
 | Deploy      | Vercel (web) · Railway (backend); runbook + rollout checklist in `docs/runbook.md` |
 
-## CI
+## Testing
 
-`.github/workflows/ci.yml` runs ruff + mypy + pytest on the backend, plus
-lint + typecheck + vitest on the frontend. Backend coverage gate is enforced
-at 80%.
+Backend: `ruff check app tests`, `ruff format --check app tests`, `mypy app`,
+`pytest -q`. Frontend: `npm run lint`, `npm run typecheck`, `npm test`.
 
 End-to-end Playwright tests live in `web/tests/e2e/happy-path.spec.ts`. They
-require both servers running locally (see `playwright.config.ts`); CI support
-needs browser binaries — `npx playwright install chromium` once.
+require both servers running locally (see `playwright.config.ts`); install
+browser binaries once with `npx playwright install chromium`.
 
 ## License
 
